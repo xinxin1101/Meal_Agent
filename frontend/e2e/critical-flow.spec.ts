@@ -15,7 +15,7 @@ async function confirmHealthyAdultBoundary(page: import("@playwright/test").Page
   await page.locator(".drawer").getByText("已确认无已知过敏原", { exact: true }).click();
   await expect(page.locator(".drawer").getByRole("radio", { name: "已确认无已知过敏原" })).toBeChecked();
   await page.getByRole("button", { name: /完成|关闭|保存/ }).last().click();
-  await expect(page.getByRole("button", { name: "生成今日计划" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "生成营养验证计划" })).toBeEnabled();
   const history = page.getByRole("checkbox", { name: /使用最近的已采用计划/ });
   if (await history.isChecked() && await history.isEnabled()) await history.uncheck();
 }
@@ -33,7 +33,7 @@ test("planning, history, assistant and safety navigation remain reachable", asyn
 test("planning reaches a completed durable run through SSE and can be adopted", async ({ page }) => {
   await register(page);
   await confirmHealthyAdultBoundary(page);
-  await page.getByRole("button", { name: "生成今日计划" }).click();
+  await page.getByRole("button", { name: "生成营养验证计划" }).click();
   await expect(page.getByText("计划已完成")).toBeVisible({ timeout: 30_000 });
   await page.getByRole("button", { name: /采用此计划/ }).click();
   await expect(page.getByText(/已加入历史计划|已采用/).first()).toBeVisible({ timeout: 10_000 });
@@ -51,7 +51,7 @@ test("an infeasible run pauses, accepts a versioned decision and resumes", async
   await confirmHealthyAdultBoundary(page);
   await page.getByRole("textbox", { name: "自然语言需求" }).fill("时间 1 分钟，蛋白质 90g，1500-1700 kcal");
   await page.locator(".constraint-grid label").filter({ hasText: "时间" }).getByRole("textbox").fill("1");
-  await page.getByRole("button", { name: "生成今日计划" }).click();
+  await page.getByRole("button", { name: "生成营养验证计划" }).click();
   await expect(page.getByText("需要确认调整")).toBeVisible({ timeout: 45_000 });
   await page.locator(".negotiation").getByRole("radio").first().check();
   await page.locator(".negotiation").getByRole("button", { name: "采用调整并继续" }).click();
