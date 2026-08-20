@@ -39,6 +39,11 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _require_clean_identifier(value: str, reason_code: str) -> None:
+    if not value or value != value.strip():
+        raise FormalNutritionCatalogRejected(reason_code)
+
+
 def inspect_formal_catalog(
     path: Path,
     *,
@@ -65,6 +70,17 @@ def inspect_formal_catalog(
     if not foods:
         raise FormalNutritionCatalogRejected("FORMAL_NUTRITION_CATALOG_EMPTY")
 
+    for food in foods:
+        _require_clean_identifier(food.canonical_id, "CANONICAL_ID_INVALID")
+        _require_clean_identifier(food.food_data_id, "FOOD_DATA_ID_INVALID")
+        _require_clean_identifier(food.source.source_id, "SOURCE_ID_INVALID")
+        _require_clean_identifier(food.source.license, "SOURCE_LICENSE_INVALID")
+        _require_clean_identifier(food.source.data_version, "SOURCE_DATA_VERSION_INVALID")
+        if food.source.license.casefold() in _FORBIDDEN_FORMAL_LICENSES:
+            raise FormalNutritionCatalogRejected("TEST_ONLY_LICENSE_NOT_FORMAL")
+        if ".invalid" in str(food.source.source_url).casefold():
+            raise FormalNutritionCatalogRejected("TEST_ONLY_SOURCE_URL_NOT_FORMAL")
+
     canonical_ids = [food.canonical_id for food in foods]
     if len(canonical_ids) != len(set(canonical_ids)):
         raise FormalNutritionCatalogRejected("DUPLICATE_CANONICAL_ID")
@@ -72,12 +88,6 @@ def inspect_formal_catalog(
     food_data_ids = [food.food_data_id for food in foods]
     if len(food_data_ids) != len(set(food_data_ids)):
         raise FormalNutritionCatalogRejected("DUPLICATE_FOOD_DATA_ID")
-
-    for food in foods:
-        if food.source.license.strip().casefold() in _FORBIDDEN_FORMAL_LICENSES:
-            raise FormalNutritionCatalogRejected("TEST_ONLY_LICENSE_NOT_FORMAL")
-        if ".invalid" in str(food.source.source_url).casefold():
-            raise FormalNutritionCatalogRejected("TEST_ONLY_SOURCE_URL_NOT_FORMAL")
 
     return foods, FormalNutritionCatalogReport(
         content_sha256=content_sha256,
