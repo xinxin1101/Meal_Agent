@@ -1,3 +1,4 @@
+import os
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -7,7 +8,13 @@ from mealpilot.main import app
 
 def test_bootstrap_admin_can_view_catalog_and_regular_user_cannot() -> None:
     admin = TestClient(app)
-    login = admin.post("/v1/auth/login", json={"email": "root", "password": "269756"})
+    login = admin.post(
+        "/v1/auth/login",
+        json={
+            "email": os.environ["MEALPILOT_ADMIN_USERNAME"],
+            "password": os.environ["MEALPILOT_ADMIN_PASSWORD"],
+        },
+    )
     assert login.status_code == 200
     assert login.json()["account"]["role"] == "ADMIN"
     admin.headers["Authorization"] = f"Bearer {login.json()['access_token']}"

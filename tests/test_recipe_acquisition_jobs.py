@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -63,7 +64,13 @@ def test_admin_preview_is_no_network_and_disabled_policy_cannot_queue(tmp_path: 
     configured = main.load_source_policy(main.PROJECT_ROOT, "meishichina.personal-study")
     monkeypatch.setattr(main, "load_source_policy", lambda _root, _policy_id: configured.model_copy(update={"enabled": False}))
     client = TestClient(main.app)
-    session = client.post("/v1/auth/login", json={"email": "root", "password": "269756"})
+    session = client.post(
+        "/v1/auth/login",
+        json={
+            "email": os.environ["MEALPILOT_ADMIN_USERNAME"],
+            "password": os.environ["MEALPILOT_ADMIN_PASSWORD"],
+        },
+    )
     client.headers["Authorization"] = f"Bearer {session.json()['access_token']}"
     payload = command().model_dump(mode="json")
     preview = client.post("/v1/admin/acquisition/previews", json=payload)
