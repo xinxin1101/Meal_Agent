@@ -165,8 +165,18 @@ def _published_recipe_path() -> Path:
     return Path(os.getenv("MEALPILOT_PUBLISHED_RECIPES_PATH", str(recipe_data_paths.published))).resolve()
 
 
+def _nutrition_catalog_path() -> Path:
+    """Resolve the formal runtime nutrition catalog; sample data is test-only."""
+    return Path(os.getenv("MEALPILOT_NUTRITION_DATA_PATH", str(recipe_data_paths.nutrition))).resolve()
+
+
+def _nutrition_catalog() -> list:
+    path = _nutrition_catalog_path()
+    return load_food_catalog(path) if path.exists() else []
+
+
 def _recipe_review_service() -> ReviewService:
-    return ReviewService(recipe_review_store, load_food_catalog(PROJECT_ROOT / "data" / "nutrition" / "foods.sample.json"))
+    return ReviewService(recipe_review_store, _nutrition_catalog())
 
 
 def _admin_review_detail(review_id: str) -> AdminReviewDetail:
@@ -195,17 +205,11 @@ def _admin_review_mutation(scope: str, idempotency_key: str, payload: object, ac
 
 
 def _catalog_coverage() -> CatalogCoverageReport:
-    return audit_catalog_coverage(
-        _recipes(),
-        load_food_catalog(PROJECT_ROOT / "data" / "nutrition" / "foods.sample.json"),
-    )
+    return audit_catalog_coverage(_recipes(), _nutrition_catalog())
 
 
 def _planning_recipes() -> list:
-    return materialize_catalog_recipes(
-        _recipes(),
-        load_food_catalog(PROJECT_ROOT / "data" / "nutrition" / "foods.sample.json"),
-    )
+    return materialize_catalog_recipes(_recipes(), _nutrition_catalog())
 
 
 def _solver_blocking_reasons(recipe) -> list[str]:
@@ -213,8 +217,7 @@ def _solver_blocking_reasons(recipe) -> list[str]:
 
     if recipe.solver_eligible:
         return []
-    foods = load_food_catalog(PROJECT_ROOT / "data" / "nutrition" / "foods.sample.json")
-    metrics = calculate_recipe_from_catalog(recipe, foods)
+    metrics = calculate_recipe_from_catalog(recipe, _nutrition_catalog())
     reasons: list[str] = []
     if any(not item.allergen_composition_known for item in recipe.ingredients):
         reasons.append("ALLERGEN_COMPOSITION_INCOMPLETE")
@@ -316,7 +319,7 @@ def metrics():
         from fastapi.responses import Response
     except ImportError as error:
         raise HTTPException(status_code=404, detail="metrics are disabled") from error
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    return Response(generate_latest(), media_type="text/plain")
 
 
 @app.get("/v1/data-quality/catalog-coverage", response_model=CatalogCoverageReport, tags=["data-quality"])
