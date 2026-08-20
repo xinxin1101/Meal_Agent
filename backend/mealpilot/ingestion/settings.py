@@ -1,4 +1,4 @@
-"""Single source of truth for persistent recipe acquisition data paths."""
+"""Single source of truth for persistent recipe and nutrition data paths."""
 
 from __future__ import annotations
 
@@ -13,11 +13,20 @@ class RecipeDataPaths:
     raw: Path
     reviews: Path
     published: Path
+    nutrition: Path
     state: Path
     jobs: Path
 
     def ensure(self) -> "RecipeDataPaths":
-        for path in (self.root, self.raw, self.reviews, self.published.parent, self.state.parent, self.jobs.parent):
+        for path in (
+            self.root,
+            self.raw,
+            self.reviews,
+            self.published.parent,
+            self.nutrition.parent,
+            self.state.parent,
+            self.jobs.parent,
+        ):
             path.mkdir(parents=True, exist_ok=True)
         return self
 
@@ -30,6 +39,7 @@ def load_recipe_data_paths(project_root: Path) -> RecipeDataPaths:
         raw=root / "raw",
         reviews=root / "reviews",
         published=root / "published" / "recipes.json",
+        nutrition=root / "nutrition" / "foods.json",
         state=root / "state" / "meishichina.json",
         jobs=root / "jobs" / "acquisition.sqlite3",
     ).ensure()
