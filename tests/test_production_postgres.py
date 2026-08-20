@@ -36,7 +36,7 @@ def test_postgres_occ_outbox_queue_recovery_and_user_isolation() -> None:
 
     memory = PostgresPreferenceMemoryStore(DATABASE_URL)
     owner, other = f"owner-{suffix}", f"other-{suffix}"
-    memory.replace(PreferenceMemory(user_id=owner, items=[PreferenceMemoryItem(category="taste", value="清淡")]))
+    memory.replace(PreferenceMemory(user_id=owner, items=[PreferenceMemoryItem(category="food_preference", value="清淡")]))
     assert [item.value for item in memory.get(owner).items] == ["清淡"]
     assert memory.get(other).items == []
 
