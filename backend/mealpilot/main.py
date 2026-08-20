@@ -319,7 +319,7 @@ def metrics():
         from fastapi.responses import Response
     except ImportError as error:
         raise HTTPException(status_code=404, detail="metrics are disabled") from error
-    return Response(generate_latest(), media_type="text/plain")
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/v1/data-quality/catalog-coverage", response_model=CatalogCoverageReport, tags=["data-quality"])
