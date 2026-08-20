@@ -1,0 +1,66 @@
+name: mealpilot
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn mealpilot.main:app --app-dir backend --host 0.0.0.0 --port 8000
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MEALPILOT_RECIPE_DATA_ROOT: /app/recipe-data
+    volumes:
+      - mealpilot_runtime:/app/.runtime
+      - mealpilot_recipe_data:/app/recipe-data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 10
+    init: true
+    networks:
+      - mealpilot_internal
+  recipe-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m mealpilot.ingestion.worker
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MEALPILOT_PROJECT_ROOT: /app
+      MEALPILOT_RECIPE_DATA_ROOT: /app/recipe-data
+    volumes:
+      - mealpilot_recipe_data:/app/recipe-data
+    restart: unless-stopped
+    init: true
+    networks:
+      - mealpilot_internal
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 5s
+      timeout: 3s
+      start_period: 5s
+      retries: 10
+    networks:
+      - mealpilot_internal
+volumes:
+  mealpilot_runtime:
+  mealpilot_recipe_data:
+networks:
+  mealpilot_internal:
+    driver: bridge

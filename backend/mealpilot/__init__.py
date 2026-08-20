@@ -1,0 +1,1 @@
+"""MealPilot domain package."""

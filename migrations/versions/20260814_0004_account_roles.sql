@@ -1,0 +1,8 @@
+BEGIN;
+
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'USER';
+ALTER TABLE accounts DROP CONSTRAINT IF EXISTS accounts_role_check;
+ALTER TABLE accounts ADD CONSTRAINT accounts_role_check CHECK (role IN ('USER','ADMIN'));
+
+INSERT INTO schema_migrations(version) VALUES('20260814_0004') ON CONFLICT(version) DO NOTHING;
+COMMIT;

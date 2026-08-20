@@ -1,0 +1,10 @@
+{
+  "name": "mealpilot-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.4",
+  "description": "Reserved for the M5 React/Vite UI shell",
+  "scripts": { "dev": "vite", "build": "tsc --noEmit && vite build", "test": "vitest run", "test:a11y": "vitest run src/test/accessibility.test.tsx", "test:e2e": "playwright test" },
+  "dependencies": { "react": "^19.0.0", "react-dom": "^19.0.0" },
+  "devDependencies": { "@playwright/test": "^1.52.0", "@testing-library/jest-dom": "^6.6.3", "@testing-library/react": "^16.3.0", "@types/node": "^22.0.0", "@types/react": "^19.0.0", "@types/react-dom": "^19.0.0", "@vitejs/plugin-react": "^4.0.0", "axe-core": "^4.10.3", "jsdom": "^26.1.0", "vite": "^6.0.0", "vitest": "^3.1.0", "typescript": "^5.0.0" }
+}

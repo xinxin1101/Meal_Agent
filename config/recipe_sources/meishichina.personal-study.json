@@ -1,0 +1,13 @@
+{
+  "policy_id": "meishichina.personal-study",
+  "policy_version": "1",
+  "enabled": true,
+  "purpose": "PERSONAL_STUDY",
+  "category_urls": ["https://home.meishichina.com/recipe/recai/"],
+  "max_records_per_run": 10,
+  "max_pages_per_category": 3,
+  "minimum_delay_seconds": 2.0,
+  "auto_publish": false,
+  "auto_publish_source_ids": [],
+  "dataset_version": "contract-v2-auto-v1"
+}

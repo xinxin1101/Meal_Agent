@@ -1,0 +1,11 @@
+BEGIN;
+
+ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_status_check;
+ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_status_check1;
+ALTER TABLE runs ADD CONSTRAINT runs_status_check CHECK (status IN ('QUEUED','RUNNING','PAUSED','COMPLETED','FAILED','CANCELLED'));
+ALTER TABLE run_jobs DROP CONSTRAINT IF EXISTS run_jobs_status_check;
+ALTER TABLE run_jobs DROP CONSTRAINT IF EXISTS run_jobs_status_check1;
+ALTER TABLE run_jobs ADD CONSTRAINT run_jobs_status_check CHECK (status IN ('READY','LEASED','DONE','FAILED','CANCELLED'));
+
+INSERT INTO schema_migrations(version) VALUES('20260813_0003') ON CONFLICT(version) DO NOTHING;
+COMMIT;

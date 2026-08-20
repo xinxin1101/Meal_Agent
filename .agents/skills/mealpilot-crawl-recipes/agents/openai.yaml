@@ -1,0 +1,4 @@
+interface:
+  display_name: "MealPilot 菜谱采集"
+  short_description: "受控采集网络菜谱并进入 MealPilot 暂存审核流程"
+  default_prompt: "Use $mealpilot-crawl-recipes to collect a small recipe batch and stage it safely for MealPilot review."

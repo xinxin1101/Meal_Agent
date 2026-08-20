@@ -1,0 +1,163 @@
+name: mealpilot-production
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mealpilot
+      POSTGRES_USER: mealpilot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - mealpilot_postgres:/var/lib/postgresql/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mealpilot -d mealpilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    networks: [data]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD}"]
+    volumes: ["mealpilot_redis:/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    restart: unless-stopped
+    networks: [data]
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    command: ["python", "scripts/migrate.py"]
+    environment:
+      DATABASE_URL: postgresql://mealpilot:${POSTGRES_PASSWORD}@postgres:5432/mealpilot
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+    networks: [data]
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    environment:
+      DATABASE_URL: postgresql://mealpilot:${POSTGRES_PASSWORD}@postgres:5432/mealpilot
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      MEALPILOT_RATE_LIMIT_PER_MINUTE: ${MEALPILOT_RATE_LIMIT_PER_MINUTE:-60}
+      MEALPILOT_TRUST_PROXY_HEADERS: "true"
+      MEALPILOT_ALLOWED_HOSTS: ${MEALPILOT_DOMAIN},web,api,localhost,127.0.0.1
+      MEALPILOT_PROJECT_ROOT: /app
+      MEALPILOT_RECIPE_DATA_ROOT: /app/recipe-data
+      MEALPILOT_ENV: production
+      MEALPILOT_AUTH_SECRET: ${MEALPILOT_AUTH_SECRET:?set MEALPILOT_AUTH_SECRET}
+      MEALPILOT_ADMIN_USERNAME: ${MEALPILOT_ADMIN_USERNAME:-root}
+      MEALPILOT_ADMIN_PASSWORD: ${MEALPILOT_ADMIN_PASSWORD:?set MEALPILOT_ADMIN_PASSWORD}
+      MEALPILOT_ADMIN_DISPLAY_NAME: ${MEALPILOT_ADMIN_DISPLAY_NAME:-Root Administrator}
+      MEALPILOT_SECURE_COOKIES: "true"
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+      SILICONFLOW_MODEL: ${SILICONFLOW_MODEL:-}
+      SILICONFLOW_BASE_URL: ${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready',timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    volumes: ["mealpilot_recipe_data:/app/recipe-data"]
+    networks: [app, data]
+
+  recipe-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    command: ["python", "-m", "mealpilot.ingestion.worker"]
+    environment:
+      MEALPILOT_PROJECT_ROOT: /app
+      MEALPILOT_RECIPE_DATA_ROOT: /app/recipe-data
+      MEALPILOT_ENV: production
+    volumes: ["mealpilot_recipe_data:/app/recipe-data"]
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+    networks: [app]
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    command: ["python", "-m", "mealpilot.production.worker"]
+    environment:
+      DATABASE_URL: postgresql://mealpilot:${POSTGRES_PASSWORD}@postgres:5432/mealpilot
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+      SILICONFLOW_MODEL: ${SILICONFLOW_MODEL:-}
+      SILICONFLOW_BASE_URL: ${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
+      MEALPILOT_PROJECT_ROOT: /app
+      MEALPILOT_ENV: production
+      MEALPILOT_AUTH_SECRET: ${MEALPILOT_AUTH_SECRET:?set MEALPILOT_AUTH_SECRET}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+    networks: [data]
+
+  maintenance:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    command: ["python", "-m", "mealpilot.production.maintenance"]
+    environment:
+      DATABASE_URL: postgresql://mealpilot:${POSTGRES_PASSWORD}@postgres:5432/mealpilot
+      MEALPILOT_ENV: production
+      MEALPILOT_AUTH_SECRET: ${MEALPILOT_AUTH_SECRET:?set MEALPILOT_AUTH_SECRET}
+      MEALPILOT_PROJECT_ROOT: /app
+      MEALPILOT_BACKUP_DIR: /backups
+      MEALPILOT_BACKUP_RETENTION_DAYS: ${MEALPILOT_BACKUP_RETENTION_DAYS:-14}
+      MEALPILOT_MAINTENANCE_INTERVAL_SECONDS: ${MEALPILOT_MAINTENANCE_INTERVAL_SECONDS:-86400}
+    volumes: ["./backups:/backups"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+    networks: [data]
+
+  web:
+    build: { context: ./frontend, dockerfile: Dockerfile }
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+    networks: [app]
+
+  gateway:
+    image: caddy:2-alpine
+    environment:
+      MEALPILOT_DOMAIN: ${MEALPILOT_DOMAIN:?set MEALPILOT_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - mealpilot_caddy_data:/data
+      - mealpilot_caddy_config:/config
+    depends_on: [web]
+    restart: unless-stopped
+    networks: [app]
+
+volumes:
+  mealpilot_postgres:
+  mealpilot_redis:
+  mealpilot_caddy_data:
+  mealpilot_caddy_config:
+  mealpilot_recipe_data:
+networks:
+  app:
+  data:
+    internal: true

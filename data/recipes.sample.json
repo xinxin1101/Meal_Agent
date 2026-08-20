@@ -1,0 +1,91 @@
+[
+  {
+    "recipe_id": "recipe-oat-egg-v1",
+    "version": "1",
+    "title": "燕麦鸡蛋碗",
+    "supported_slots": ["breakfast"],
+    "servings": "1",
+    "prep_minutes": 12,
+    "nutrition_per_serving": {"energy_kcal": "410.0", "protein_g": "22.5", "carbohydrate_g": "48.0", "fat_g": "15.0"},
+    "nutrition_basis": "CALCULATED_FROM_INGREDIENTS",
+    "solver_eligible": true,
+    "ingredients": [
+      {"canonical_id": "oats", "canonical_name": "燕麦", "display_quantity": "60克", "quantity_kind": "MEASURED", "amount_g": "60", "allergens": ["gluten"]},
+      {"canonical_id": "egg", "canonical_name": "鸡蛋", "display_quantity": "100克", "quantity_kind": "MEASURED", "amount_g": "100", "allergens": ["egg"]}
+    ],
+    "cooking_steps": [],
+    "source": {"source_id": "local-fixture-001", "source_url": "https://example.invalid/mealpilot/recipe-oat-egg", "license": "internal-development-only", "data_version": "2026-08-14-contract-v2"},
+    "numeric_policy_version": "contract-v2-decimal-v1"
+  },
+  {
+    "recipe_id": "recipe-chicken-rice-v1",
+    "version": "1",
+    "title": "鸡胸肉糙米饭",
+    "supported_slots": ["lunch", "dinner"],
+    "servings": "1",
+    "prep_minutes": 25,
+    "nutrition_per_serving": {"energy_kcal": "560.0", "protein_g": "42.0", "carbohydrate_g": "62.0", "fat_g": "14.0"},
+    "nutrition_basis": "CALCULATED_FROM_INGREDIENTS",
+    "solver_eligible": true,
+    "ingredients": [
+      {"canonical_id": "chicken-breast", "canonical_name": "鸡胸肉", "display_quantity": "180克", "quantity_kind": "MEASURED", "amount_g": "180", "allergens": []},
+      {"canonical_id": "brown-rice", "canonical_name": "糙米", "display_quantity": "80克", "quantity_kind": "MEASURED", "amount_g": "80", "allergens": []}
+    ],
+    "cooking_steps": [],
+    "source": {"source_id": "local-fixture-002", "source_url": "https://example.invalid/mealpilot/recipe-chicken-rice", "license": "internal-development-only", "data_version": "2026-08-14-contract-v2"},
+    "numeric_policy_version": "contract-v2-decimal-v1"
+  },
+  {
+    "recipe_id": "recipe-yogurt-fruit-v1",
+    "version": "1",
+    "title": "酸奶水果杯",
+    "supported_slots": ["breakfast"],
+    "servings": "1",
+    "prep_minutes": 8,
+    "nutrition_per_serving": {"energy_kcal": "360.0", "protein_g": "18.0", "carbohydrate_g": "52.0", "fat_g": "9.0"},
+    "nutrition_basis": "CALCULATED_FROM_INGREDIENTS",
+    "solver_eligible": true,
+    "ingredients": [
+      {"canonical_id": "yogurt", "canonical_name": "酸奶", "display_quantity": "250克", "quantity_kind": "MEASURED", "amount_g": "250", "allergens": ["milk"]}
+    ],
+    "cooking_steps": [],
+    "source": {"source_id": "local-fixture-003", "source_url": "https://example.invalid/mealpilot/recipe-yogurt-fruit", "license": "internal-development-only", "data_version": "2026-08-14-contract-v2"},
+    "numeric_policy_version": "contract-v2-decimal-v1"
+  },
+  {
+    "recipe_id": "recipe-beef-vegetables-v1",
+    "version": "1",
+    "title": "牛肉时蔬",
+    "supported_slots": ["lunch", "dinner"],
+    "servings": "1",
+    "prep_minutes": 22,
+    "nutrition_per_serving": {"energy_kcal": "620.0", "protein_g": "48.0", "carbohydrate_g": "38.0", "fat_g": "28.0"},
+    "nutrition_basis": "CALCULATED_FROM_INGREDIENTS",
+    "solver_eligible": true,
+    "ingredients": [
+      {"canonical_id": "beef", "canonical_name": "牛肉", "display_quantity": "180克", "quantity_kind": "MEASURED", "amount_g": "180", "allergens": []},
+      {"canonical_id": "broccoli", "canonical_name": "西兰花", "display_quantity": "150克", "quantity_kind": "MEASURED", "amount_g": "150", "allergens": []}
+    ],
+    "cooking_steps": [],
+    "source": {"source_id": "local-fixture-004", "source_url": "https://example.invalid/mealpilot/recipe-beef-vegetables", "license": "internal-development-only", "data_version": "2026-08-14-contract-v2"},
+    "numeric_policy_version": "contract-v2-decimal-v1"
+  },
+  {
+    "recipe_id": "recipe-tofu-noodles-v1",
+    "version": "1",
+    "title": "豆腐蔬菜面",
+    "supported_slots": ["lunch", "dinner"],
+    "servings": "1",
+    "prep_minutes": 18,
+    "nutrition_per_serving": {"energy_kcal": "510.0", "protein_g": "24.0", "carbohydrate_g": "68.0", "fat_g": "16.0"},
+    "nutrition_basis": "CALCULATED_FROM_INGREDIENTS",
+    "solver_eligible": true,
+    "ingredients": [
+      {"canonical_id": "tofu", "canonical_name": "豆腐", "display_quantity": "180克", "quantity_kind": "MEASURED", "amount_g": "180", "allergens": ["soy"]},
+      {"canonical_id": "noodles", "canonical_name": "面条", "display_quantity": "100克", "quantity_kind": "MEASURED", "amount_g": "100", "allergens": ["gluten"]}
+    ],
+    "cooking_steps": [],
+    "source": {"source_id": "local-fixture-005", "source_url": "https://example.invalid/mealpilot/recipe-tofu-noodles", "license": "internal-development-only", "data_version": "2026-08-14-contract-v2"},
+    "numeric_policy_version": "contract-v2-decimal-v1"
+  }
+]
