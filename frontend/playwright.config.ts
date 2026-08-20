@@ -21,6 +21,7 @@ export default defineConfig({
         MEALPILOT_RUNTIME_DIR: "../.runtime/e2e",
         MEALPILOT_INCLUDE_SAMPLE_RECIPES: "true",
         MEALPILOT_PUBLISHED_RECIPES_PATH: "../tests/fixtures/no-runtime-recipes.json",
+        MEALPILOT_NUTRITION_DATA_PATH: "../data/nutrition/foods.sample.json",
       },
     },
   ],

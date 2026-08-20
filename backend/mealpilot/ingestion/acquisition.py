@@ -50,7 +50,8 @@ def execute_acquisition_job(project_root: Path, paths: RecipeDataPaths, job: Rec
         "auto_publish": False,
         "auto_publish_source_ids": [],
     })
-    review = ReviewService(ReviewStore(paths.reviews), load_food_catalog(project_root / "data" / "nutrition" / "foods.sample.json"))
+    foods = load_food_catalog(paths.nutrition) if paths.nutrition.exists() else []
+    review = ReviewService(ReviewStore(paths.reviews), foods)
     fetch = FetchPolicy(delay_seconds=policy.minimum_delay_seconds)
     with MeishiChinaHttpClient(policy=fetch) as client:
         report = run_incremental_automation(

@@ -13,8 +13,12 @@ if os.getenv("MEALPILOT_ENV", "development").casefold() != "production":
     os.environ["MEALPILOT_ADMIN_PASSWORD"] = "test-admin-password-only"
     os.environ["MEALPILOT_ADMIN_DISPLAY_NAME"] = "Test Administrator"
 
-# The repository sample corpus is a test fixture, not a runtime database.
+# Repository recipe and nutrition samples are explicit test fixtures, never runtime defaults.
 os.environ.setdefault("MEALPILOT_INCLUDE_SAMPLE_RECIPES", "true")
+os.environ.setdefault(
+    "MEALPILOT_NUTRITION_DATA_PATH",
+    str(_PROJECT_ROOT / "data" / "nutrition" / "foods.sample.json"),
+)
 # Keep developer/runtime publications from changing deterministic test counts.
 os.environ.setdefault(
     "MEALPILOT_PUBLISHED_RECIPES_PATH",
