@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -12,7 +13,13 @@ from tests.test_meishichina_quality_review import _raw_recipe
 
 def admin_client() -> TestClient:
     client = TestClient(main.app)
-    session = client.post("/v1/auth/login", json={"email": "root", "password": "269756"})
+    session = client.post(
+        "/v1/auth/login",
+        json={
+            "email": os.environ["MEALPILOT_ADMIN_USERNAME"],
+            "password": os.environ["MEALPILOT_ADMIN_PASSWORD"],
+        },
+    )
     assert session.status_code == 200
     client.headers["Authorization"] = f"Bearer {session.json()['access_token']}"
     return client

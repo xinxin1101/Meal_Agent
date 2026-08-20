@@ -64,10 +64,7 @@ else:
     conversation_store = ConversationStore(runtime_dir / "conversations.sqlite3")
     account_store = SqliteAccountStore(runtime_dir / "accounts.sqlite3")
 
-is_production = os.getenv("MEALPILOT_ENV", "development").casefold() == "production"
-bootstrap_admin_password = os.getenv("MEALPILOT_ADMIN_PASSWORD")
-if not is_production and bootstrap_admin_password is None:
-    bootstrap_admin_password = "269756"
+bootstrap_admin_password = os.getenv("MEALPILOT_ADMIN_PASSWORD", "").strip()
 if bootstrap_admin_password:
     account_store.ensure_admin(
         os.getenv("MEALPILOT_ADMIN_USERNAME", "root"),
