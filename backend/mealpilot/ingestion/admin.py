@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from mealpilot.domain.models import MealSlot
+from mealpilot.domain.models import MealSlot, QuantityOrigin
 from mealpilot.ingestion.quality import (
     IngredientOverride,
     LEXICON,
@@ -148,13 +148,17 @@ def build_trusted_curation(raw: RawMeishiChinaRecipe, command: AdminReviewCurati
         option = options.get(patch.canonical_id)
         if option is None:
             raise ValueError(f"canonical ingredient is not trusted: {patch.canonical_id}")
+        source_label = source.raw_amount.strip()
         label = patch.qualitative_label
-        if label is None and patch.amount is None and source.raw_amount.strip() in {"适量", "少许"}:
-            label = source.raw_amount.strip()  # type: ignore[assignment]
+        if label is None and patch.amount is None and source_label in {"适量", "少许"}:
+            label = source_label  # type: ignore[assignment]
+        quantity_origin = QuantityOrigin.SOURCE_EXPLICIT
+        if patch.amount is not None or (patch.qualitative_label is not None and patch.qualitative_label != source_label):
+            quantity_origin = QuantityOrigin.REVIEWER_CONFIRMED
         overrides.append(IngredientOverride(
             raw_name=source.raw_name, canonical_id=option.canonical_id,
             canonical_name=option.canonical_name, amount=patch.amount, unit=patch.unit,
-            qualitative_label=label,
+            qualitative_label=label, quantity_origin=quantity_origin,
             nutrition_calculation_role=patch.nutrition_calculation_role,
             allergens=option.allergens,
             allergen_composition_known=option.allergen_composition_known,
