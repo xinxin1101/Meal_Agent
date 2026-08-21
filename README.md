@@ -2,7 +2,7 @@
 
 Constraint-aware, non-medical meal planning for healthy adults.
 
-This repository delivers the frozen local MVP: a one-person day plan from versioned local, Solver-eligible recipes and nutrition fixtures, with a structured coverage/infeasibility result. It runs on Python 3.11 and the deterministic core does not require an LLM or vector database. Contract v2 has no price, budget, or structured equipment planning.
+This repository delivers the frozen local MVP: a one-person day plan from versioned local, Solver-eligible recipes and nutrition inputs, with a structured coverage/infeasibility result. It runs on Python 3.11 and the deterministic core does not require an LLM or vector database. Contract v2 has no price, budget, or structured equipment planning.
 
 ## Quick start
 
@@ -25,6 +25,8 @@ For the demo UI, run `pnpm install` then `pnpm dev` inside `frontend`, or run `d
 Recipe acquisition is not required for infrastructure startup, but planning remains business-blocked until the formal catalog has Solver-ready breakfast, lunch, and dinner coverage. The administrator can preview and queue a bounded personal-study job; a separate Worker performs network work and writes only to the persistent raw/review boundary. Personal study alone never authorizes publication. See [`docs/recipe_automation.md`](docs/recipe_automation.md).
 
 The runtime catalog starts without repository sample recipes. Samples remain test fixtures and are enabled only with `MEALPILOT_INCLUDE_SAMPLE_RECIPES=true`. New captures follow `initial validation -> bounded LLM display structuring -> Pydantic/deterministic final validation -> administrator batch approval and publication`. The active UI no longer asks administrators to register licence evidence. Source URL/hash/time remain stored, and published records are scoped to this internal personal-study application rather than public redistribution.
+
+Formal nutrition is also separate from repository fixtures. Runtime and acquisition use `<MEALPILOT_RECIPE_DATA_ROOT>/nutrition/foods.json`; a missing formal catalog fails closed rather than falling back to `data/nutrition/foods.sample.json`. Use `scripts/import_nutrition_catalog.py` to inspect a candidate and install only the exact human-reviewed, SHA-256-bound bytes. Replacing an existing catalog additionally requires the current installed SHA as an optimistic-concurrency check. See [`docs/formal_nutrition_catalog.md`](docs/formal_nutrition_catalog.md).
 
 `POST /v1/meal-plans/deterministic` accepts a complete healthy-adult profile and time/energy/protein constraints. It materializes planning inputs from the local nutrition catalog, then performs safety and Solver-eligibility filtering, candidate coverage checks, CP-SAT selection, and Decimal revalidation.
 
