@@ -9,12 +9,25 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mealpilot.ingestion.quality import QUALITY_GATE_VERSION, RecipeQualityReport, build_quality_draft
+from mealpilot.ingestion.quality import QUALITY_GATE_VERSION, build_quality_draft
 from mealpilot.ingestion.review import RecipeReviewItem
 from mealpilot.nutrition.catalog import FoodNutrition
 
 
 REPORT_VERSION = "m40-f-v1"
+PriorityCategory = Literal[
+    "servings",
+    "prep_time",
+    "meal_slots",
+    "cooking_steps",
+    "ingredient_identity",
+    "ingredient_quantity",
+    "allergen_composition",
+    "nutrition_coverage",
+    "other",
+]
+RemediationKind = Literal["DETERMINISTIC_OR_LLM_ASSIST", "TRUSTED_DATA_ENRICHMENT", "HUMAN_REVIEW"]
+FunnelStage = Literal["PUBLICATION", "SOLVER"]
 
 
 class FunnelBlocker(BaseModel):
@@ -27,22 +40,12 @@ class FunnelBlocker(BaseModel):
 
 class FunnelPriority(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    category: Literal[
-        "servings",
-        "prep_time",
-        "meal_slots",
-        "cooking_steps",
-        "ingredient_identity",
-        "ingredient_quantity",
-        "allergen_composition",
-        "nutrition_coverage",
-        "other",
-    ]
-    stage: Literal["PUBLICATION", "SOLVER"]
+    category: PriorityCategory
+    stage: FunnelStage
     count: int = Field(ge=1)
     affected_rate: Decimal = Field(ge=0, le=1)
     reason_codes: list[str] = Field(min_length=1)
-    remediation: Literal["DETERMINISTIC_OR_LLM_ASSIST", "TRUSTED_DATA_ENRICHMENT", "HUMAN_REVIEW"]
+    remediation: RemediationKind
 
 
 class FunnelDriftRecord(BaseModel):
@@ -100,22 +103,24 @@ def _rate(numerator: int, denominator: int) -> Decimal:
 
 
 def _rank_blockers(
-    counts: Counter[str],
-    samples: dict[str, list[str]],
+    affected_reviews: dict[str, set[str]],
     total: int,
 ) -> list[FunnelBlocker]:
     return [
         FunnelBlocker(
             code=code,
-            count=count,
-            affected_rate=_rate(count, total),
-            sample_review_ids=samples.get(code, [])[:5],
+            count=len(review_ids),
+            affected_rate=_rate(len(review_ids), total),
+            sample_review_ids=sorted(review_ids)[:5],
         )
-        for code, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        for code, review_ids in sorted(
+            affected_reviews.items(), key=lambda item: (-len(item[1]), item[0])
+        )
+        if review_ids
     ]
 
 
-def _priority_category(code: str) -> tuple[str, str]:
+def _priority_category(code: str) -> tuple[PriorityCategory, RemediationKind]:
     if code == "SERVINGS_MISSING":
         return "servings", "DETERMINISTIC_OR_LLM_ASSIST"
     if code == "TIME_MISSING":
@@ -123,7 +128,8 @@ def _priority_category(code: str) -> tuple[str, str]:
     if code == "MEAL_SLOTS_MISSING":
         return "meal_slots", "DETERMINISTIC_OR_LLM_ASSIST"
     if code == "COOKING_STEPS_MISSING" or code.startswith(("NON_ACTIONABLE_STEP", "IMAGE_DEPENDENT_STEP", "MEDICAL_STEP_TEXT")):
-        return "cooking_steps", "HUMAN_REVIEW" if code.startswith("MEDICAL_STEP_TEXT") else "DETERMINISTIC_OR_LLM_ASSIST"
+        remediation: RemediationKind = "HUMAN_REVIEW" if code.startswith("MEDICAL_STEP_TEXT") else "DETERMINISTIC_OR_LLM_ASSIST"
+        return "cooking_steps", remediation
     if code == "INGREDIENT_MAPPING_INCOMPLETE":
         return "ingredient_identity", "HUMAN_REVIEW"
     if code in {"INGREDIENT_QUANTITY_INCOMPLETE", "NUTRITION_QUANTITY_INCOMPLETE", "NUTRITION_NOT_CALCULABLE"}:
@@ -136,30 +142,29 @@ def _priority_category(code: str) -> tuple[str, str]:
 
 
 def _priorities(
-    publication_counts: Counter[str],
-    solver_counts: Counter[str],
+    publication_affected: dict[str, set[str]],
+    solver_affected: dict[str, set[str]],
     total: int,
 ) -> list[FunnelPriority]:
-    grouped: dict[tuple[str, str, str], dict[str, object]] = {}
-    for stage, counts in (("PUBLICATION", publication_counts), ("SOLVER", solver_counts)):
-        for code, count in counts.items():
+    grouped_reviews: dict[tuple[FunnelStage, PriorityCategory, RemediationKind], set[str]] = defaultdict(set)
+    grouped_codes: dict[tuple[FunnelStage, PriorityCategory, RemediationKind], set[str]] = defaultdict(set)
+    for stage, affected in (("PUBLICATION", publication_affected), ("SOLVER", solver_affected)):
+        for code, review_ids in affected.items():
             category, remediation = _priority_category(code)
             key = (stage, category, remediation)
-            entry = grouped.setdefault(key, {"count": 0, "codes": []})
-            entry["count"] = int(entry["count"]) + count
-            cast_codes = entry["codes"]
-            assert isinstance(cast_codes, list)
-            cast_codes.append(code)
+            grouped_reviews[key].update(review_ids)
+            grouped_codes[key].add(code)
     values = [
         FunnelPriority(
-            category=category,  # type: ignore[arg-type]
-            stage=stage,  # type: ignore[arg-type]
-            count=int(value["count"]),
-            affected_rate=_rate(int(value["count"]), total),
-            reason_codes=sorted(set(value["codes"])),  # type: ignore[arg-type]
-            remediation=remediation,  # type: ignore[arg-type]
+            category=category,
+            stage=stage,
+            count=len(review_ids),
+            affected_rate=_rate(len(review_ids), total),
+            reason_codes=sorted(grouped_codes[(stage, category, remediation)]),
+            remediation=remediation,
         )
-        for (stage, category, remediation), value in grouped.items()
+        for (stage, category, remediation), review_ids in grouped_reviews.items()
+        if review_ids
     ]
     # Publication blockers drive the next automation step before Solver-only enrichment.
     return sorted(values, key=lambda item: (0 if item.stage == "PUBLICATION" else 1, -item.count, item.category))
@@ -181,10 +186,8 @@ def audit_review_corpus(
     lifecycle_counts: Counter[str] = Counter()
     gate_counts: Counter[str] = Counter()
     status_counts: Counter[str] = Counter()
-    publication_counts: Counter[str] = Counter()
-    solver_counts: Counter[str] = Counter()
-    publication_samples: dict[str, list[str]] = defaultdict(list)
-    solver_samples: dict[str, list[str]] = defaultdict(list)
+    publication_affected: dict[str, set[str]] = defaultdict(set)
+    solver_affected: dict[str, set[str]] = defaultdict(set)
     records: list[FunnelRecord] = []
     drift_records: list[FunnelDriftRecord] = []
 
@@ -194,13 +197,9 @@ def audit_review_corpus(
         gate_counts[item.quality_report.quality_gate_version] += 1
         status_counts[report.status] += 1
         for code in report.blocking_reasons:
-            publication_counts[code] += 1
-            if len(publication_samples[code]) < 5:
-                publication_samples[code].append(item.review_id)
+            publication_affected[code].add(item.review_id)
         for code in report.solver_blocking_reasons:
-            solver_counts[code] += 1
-            if len(solver_samples[code]) < 5:
-                solver_samples[code].append(item.review_id)
+            solver_affected[code].add(item.review_id)
         if (
             item.quality_report.quality_gate_version != QUALITY_GATE_VERSION
             or item.quality_report.status != report.status
@@ -251,9 +250,9 @@ def audit_review_corpus(
         publishable_rate=_rate(publishable, total),
         solver_ready_rate=_rate(solver_ready, total),
         solver_within_publishable_rate=_rate(solver_ready, publishable),
-        publication_blockers=_rank_blockers(publication_counts, publication_samples, total),
-        solver_blockers=_rank_blockers(solver_counts, solver_samples, total),
-        priorities=_priorities(publication_counts, solver_counts, total),
+        publication_blockers=_rank_blockers(publication_affected, total),
+        solver_blockers=_rank_blockers(solver_affected, total),
+        priorities=_priorities(publication_affected, solver_affected, total),
         drift_count=len(drift_records),
         drift_records=drift_records,
         records=records,
