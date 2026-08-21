@@ -11,15 +11,15 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from mealpilot.domain.models import CookingStep, IngredientQuantityKind, MealSlot, Nutrition
+from mealpilot.domain.models import CookingStep, IngredientQuantityKind, MealSlot, Nutrition, QuantityOrigin
 from mealpilot.ingestion.sources.meishichina.models import RawMeishiChinaRecipe, RawRecipeIngredient
 from mealpilot.ingestion.sources.meishichina.parser import IMAGE_DEPENDENT, MEDICAL_CLAIM
 from mealpilot.nutrition.catalog import FoodNutrition, IngredientConversion, normalize_quantity
 
 
-QUALITY_GATE_VERSION = "mc-r3-v3"
+QUALITY_GATE_VERSION = "mc-r3-v4"
 QUALITATIVE_AMOUNTS = {"适量", "少许"}
-UNSUPPORTED_AMBIGUOUS_AMOUNTS = {"", "若干", "酌量", "按需", "随意"}
+DISPLAYABLE_AMBIGUOUS_AMOUNTS = {"若干", "酌量", "按需", "随意"}
 PRESENTATION_ONLY_STEP = re.compile(
     r"^(?:成品(?:图)?|完成图|装盘图|效果图|早餐|午餐|晚餐)[\s。.!！]*$",
     re.IGNORECASE,
@@ -47,6 +47,7 @@ class IngredientOverride(BaseModel):
     amount: Decimal | None = Field(default=None, gt=0)
     unit: str | None = Field(default=None, min_length=1)
     qualitative_label: Literal["适量", "少许"] | None = None
+    quantity_origin: QuantityOrigin = QuantityOrigin.SOURCE_EXPLICIT
     nutrition_calculation_role: Literal["INCLUDED", "EXCLUDED_MINOR_INGREDIENT"] = "INCLUDED"
     allergens: list[str]
     allergen_composition_known: bool
@@ -101,6 +102,7 @@ class NormalizedDraftIngredient(BaseModel):
     canonical_name: str | None
     display_quantity: str
     quantity_kind: IngredientQuantityKind | None
+    quantity_origin: QuantityOrigin = QuantityOrigin.SOURCE_EXPLICIT
     amount_g: Decimal | None = Field(default=None, gt=0)
     nutrition_calculation_role: Literal["INCLUDED", "EXCLUDED_MINOR_INGREDIENT"]
     allergens: list[str] = Field(default_factory=list)
@@ -127,7 +129,7 @@ class StructuredRecipeDraft(BaseModel):
     nutrition_basis: Literal["CALCULATED_FROM_INGREDIENTS", "SOURCE_DECLARED", "REVIEWED_STANDARD_PORTION"] | None
     solver_eligible: bool
     nutrition_data_version: str | None
-    numeric_policy_version: Literal["mc-r3-v2", "mc-r3-v3"] = QUALITY_GATE_VERSION
+    numeric_policy_version: Literal["mc-r3-v2", "mc-r3-v3", "mc-r3-v4"] = QUALITY_GATE_VERSION
     removed_medical_text_count: int = Field(ge=0)
     removed_presentation_step_numbers: list[int] = Field(default_factory=list)
 
@@ -135,13 +137,14 @@ class StructuredRecipeDraft(BaseModel):
 class RecipeQualityReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
     staging_id: str
-    quality_gate_version: Literal["mc-r3-v2", "mc-r3-v3"] = QUALITY_GATE_VERSION
+    quality_gate_version: Literal["mc-r3-v2", "mc-r3-v3", "mc-r3-v4"] = QUALITY_GATE_VERSION
     status: Literal["BLOCKED", "PUBLICATION_READY", "SOLVER_READY"]
     blocking_reasons: list[str]
     solver_blocking_reasons: list[str]
     warnings: list[str]
     unresolved_ingredient_names: list[str]
     unresolved_quantity_names: list[str]
+    unspecified_quantity_names: list[str] = Field(default_factory=list)
     unknown_allergen_composition_names: list[str]
     missing_nutrition_ids: list[str]
     image_independent_steps: bool
@@ -287,8 +290,8 @@ def parse_amount(raw_amount: str) -> tuple[Decimal | None, str | None, str | Non
     cleaned = clean_amount(raw_amount)
     if cleaned in QUALITATIVE_AMOUNTS:
         return None, None, None
-    if cleaned in UNSUPPORTED_AMBIGUOUS_AMOUNTS:
-        return None, None, "AMOUNT_AMBIGUOUS_UNSUPPORTED"
+    if not cleaned or cleaned in DISPLAYABLE_AMBIGUOUS_AMOUNTS:
+        return None, None, "AMOUNT_UNSPECIFIED"
     embedded = EMBEDDED_MASS_PATTERN.search(cleaned)
     match = embedded or AMOUNT_PATTERN.fullmatch(cleaned)
     if not match:
@@ -354,26 +357,43 @@ def normalize_ingredient(ingredient: RawRecipeIngredient, override: IngredientOv
     reasons: list[str] = []
     amount_g: Decimal | None = None
     conversion_source: str | None = None
+    raw_display = ingredient.raw_amount.strip()
     raw_label = clean_amount(ingredient.raw_amount)
     qualitative_label = override.qualitative_label if override is not None else (
         raw_label if raw_label in QUALITATIVE_AMOUNTS else None
     )
-    quantity_kind: IngredientQuantityKind | None = None
+    calculation_role = override.nutrition_calculation_role if override is not None else "INCLUDED"
+
     if override is not None and override.amount is not None and override.unit is not None:
         display_quantity = f"{override.amount}{override.unit}"
-    else:
-        display_quantity = qualitative_label or ingredient.raw_amount.strip()
-    calculation_role = override.nutrition_calculation_role if override is not None else "INCLUDED"
-    if qualitative_label is not None:
+        quantity_origin = override.quantity_origin
+        amount_g, conversion_source, quantity_warning = resolve_quantity(ingredient, canonical_id, override)
+        quantity_kind = IngredientQuantityKind.MEASURED if amount_g is not None else IngredientQuantityKind.UNSPECIFIED
+        if quantity_kind == IngredientQuantityKind.UNSPECIFIED:
+            display_quantity = raw_display or ("适量" if ingredient.group == "seasoning" else "用量未注明")
+            quantity_origin = QuantityOrigin.SOURCE_EXPLICIT if raw_display else QuantityOrigin.DISPLAY_FALLBACK
+    elif qualitative_label is not None:
+        display_quantity = qualitative_label
         quantity_kind = IngredientQuantityKind.QUALITATIVE
+        quantity_origin = override.quantity_origin if override is not None else QuantityOrigin.SOURCE_EXPLICIT
         if calculation_role == "EXCLUDED_MINOR_INGREDIENT" and ingredient.group != "seasoning":
             reasons.append("ONLY_SEASONING_MAY_BE_EXCLUDED_FROM_NUTRITION")
     else:
         amount_g, conversion_source, quantity_warning = resolve_quantity(ingredient, canonical_id, override)
-        if quantity_warning:
-            reasons.append(quantity_warning)
-        elif amount_g is not None:
+        if amount_g is not None:
+            display_quantity = raw_display
             quantity_kind = IngredientQuantityKind.MEASURED
+            quantity_origin = QuantityOrigin.SOURCE_EXPLICIT
+        else:
+            quantity_kind = IngredientQuantityKind.UNSPECIFIED
+            quantity_origin = QuantityOrigin.SOURCE_EXPLICIT if raw_display else QuantityOrigin.DISPLAY_FALLBACK
+            if raw_display:
+                display_quantity = raw_display
+            elif ingredient.group == "seasoning":
+                display_quantity = "适量"
+            else:
+                display_quantity = "用量未注明"
+
     if not known:
         reasons.append("ALLERGEN_COMPOSITION_UNKNOWN")
     return NormalizedDraftIngredient(
@@ -384,6 +404,7 @@ def normalize_ingredient(ingredient: RawRecipeIngredient, override: IngredientOv
         canonical_name=canonical_name,
         display_quantity=display_quantity,
         quantity_kind=quantity_kind,
+        quantity_origin=quantity_origin,
         amount_g=amount_g,
         nutrition_calculation_role=calculation_role,
         allergens=allergens,
@@ -483,6 +504,9 @@ def build_quality_draft(
 
     unresolved_names = sorted(item.raw_name for item in ingredients if item.canonical_id is None)
     unresolved_quantities = sorted(item.raw_name for item in ingredients if item.quantity_kind is None)
+    unspecified_quantities = sorted(
+        item.raw_name for item in ingredients if item.quantity_kind == IngredientQuantityKind.UNSPECIFIED
+    )
     unknown_allergens = sorted(item.raw_name for item in ingredients if not item.allergen_composition_known)
     publication_blocking: list[str] = []
     if unresolved_names:
@@ -499,8 +523,6 @@ def build_quality_draft(
     for item in ingredients:
         if "ONLY_SEASONING_MAY_BE_EXCLUDED_FROM_NUTRITION" in item.blocking_reasons:
             publication_blocking.append("INVALID_NUTRITION_EXCLUSION")
-        if "AMOUNT_AMBIGUOUS_UNSUPPORTED" in item.blocking_reasons:
-            publication_blocking.append("INGREDIENT_QUANTITY_INCOMPLETE")
     publication_blocking = list(dict.fromkeys(publication_blocking))
     solver_blocking = list(publication_blocking)
     if unknown_allergens:
@@ -517,6 +539,8 @@ def build_quality_draft(
     status = "BLOCKED" if publication_blocking else ("SOLVER_READY" if solver_eligible else "PUBLICATION_READY")
     warnings = list(raw.warnings)
     warnings = [item for item in warnings if item != "EQUIPMENT_NOT_DECLARED"]
+    if unspecified_quantities:
+        warnings.append("UNSPECIFIED_QUANTITY_PUBLICATION_ONLY")
     if unknown_allergens:
         warnings.append("ALLERGEN_COMPOSITION_INCOMPLETE_PUBLICATION_ONLY")
     if removed_medical:
@@ -552,6 +576,7 @@ def build_quality_draft(
         "warnings": list(dict.fromkeys(warnings)),
         "unresolved_ingredient_names": unresolved_names,
         "unresolved_quantity_names": unresolved_quantities,
+        "unspecified_quantity_names": unspecified_quantities,
         "unknown_allergen_composition_names": unknown_allergens,
         "missing_nutrition_ids": missing_nutrition,
         "image_independent_steps": not any(reason.startswith("IMAGE_DEPENDENT_STEP") for reason in step_reasons),
