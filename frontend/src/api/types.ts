@@ -2,6 +2,8 @@ export type ActivityLevel = "sedentary" | "light" | "moderate" | "active" | "ver
 export type NutritionGoal = "lose" | "maintain" | "gain";
 export type NutritionParameterSex = "female" | "male" | "unspecified";
 export type MealSlot = "breakfast" | "lunch" | "dinner";
+export type IngredientQuantityKind = "MEASURED" | "QUALITATIVE" | "UNSPECIFIED";
+export type QuantityOrigin = "SOURCE_EXPLICIT" | "DISPLAY_FALLBACK" | "REVIEWER_CONFIRMED";
 
 export interface UserProfile {
   profile_snapshot_id: string;
@@ -61,7 +63,7 @@ export interface PlanTotals {
 
 export interface NegotiationOption { option_id: string; field: "max_total_minutes" | "protein_min_g" | "energy_kcal_range"; proposed_value: string; impact: string }
 export interface NegotiationProposal { proposal_id: string; reason_code: string; options: NegotiationOption[]; explanation: string }
-export interface RecipeIngredient { canonical_id: string; canonical_name: string; display_quantity: string; quantity_kind: "MEASURED" | "QUALITATIVE"; amount_g?: string | null; nutrition_calculation_role: "INCLUDED" | "EXCLUDED_MINOR_INGREDIENT"; allergens: string[]; allergen_composition_known: boolean }
+export interface RecipeIngredient { canonical_id: string; canonical_name: string; display_quantity: string; quantity_kind: IngredientQuantityKind; quantity_origin?: QuantityOrigin; amount_g?: string | null; nutrition_calculation_role: "INCLUDED" | "EXCLUDED_MINOR_INGREDIENT"; allergens: string[]; allergen_composition_known: boolean }
 export interface CookingStep { step_number: number; instruction: string; duration_minutes?: number | null; ingredient_refs: string[] }
 export interface Recipe {
   recipe_id: string; version: string; title: string; supported_slots: MealSlot[]; servings: string; prep_minutes: number;
@@ -101,7 +103,7 @@ export interface AdminCanonicalIngredient { canonical_id: string; canonical_name
 export interface AdminRawIngredient { group: "main" | "secondary" | "seasoning" | "other"; raw_name: string; raw_amount: string; raw_text: string }
 export interface AdminIngredientOverride {
   raw_name: string; canonical_id: string; canonical_name: string; amount?: string | null; unit?: string | null;
-  qualitative_label?: "适量" | "少许" | null; nutrition_calculation_role: "INCLUDED" | "EXCLUDED_MINOR_INGREDIENT";
+  qualitative_label?: "适量" | "少许" | null; quantity_origin?: QuantityOrigin; nutrition_calculation_role: "INCLUDED" | "EXCLUDED_MINOR_INGREDIENT";
   allergens: string[]; allergen_composition_known: boolean;
 }
 export interface AdminAuthorizationEvidence {
@@ -114,8 +116,8 @@ export interface AdminRecipeReview {
   processing_stage: "INITIAL_VALIDATED" | "LLM_FAILED" | "FINAL_VALIDATION_BLOCKED" | "FINAL_VALIDATED"; processing_errors: string[]; source_use_scope: "PERSONAL_STUDY_INTERNAL";
   raw: { source_id: string; source_url: string; title: string; ingredients: AdminRawIngredient[]; cooking_steps: CookingStep[]; warnings: string[]; copyright_notice?: string | null };
   curation: { title_override?: string | null; servings?: string | null; supported_slots: MealSlot[]; prep_minutes?: number | null; ingredient_overrides: AdminIngredientOverride[]; step_overrides: Record<string, string>; excluded_step_numbers: number[] };
-  draft: { title: string; ingredients: Array<{ raw_name: string; canonical_id?: string | null; canonical_name?: string | null; display_quantity: string; quantity_kind?: "MEASURED" | "QUALITATIVE" | null }>; cooking_steps: CookingStep[]; solver_eligible: boolean };
-  quality_report: { status: "BLOCKED" | "PUBLICATION_READY" | "SOLVER_READY"; blocking_reasons: string[]; solver_blocking_reasons: string[]; warnings: string[] };
+  draft: { title: string; ingredients: Array<{ raw_name: string; canonical_id?: string | null; canonical_name?: string | null; display_quantity: string; quantity_kind?: IngredientQuantityKind | null; quantity_origin?: QuantityOrigin }>; cooking_steps: CookingStep[]; solver_eligible: boolean };
+  quality_report: { status: "BLOCKED" | "PUBLICATION_READY" | "SOLVER_READY"; blocking_reasons: string[]; solver_blocking_reasons: string[]; warnings: string[]; unspecified_quantity_names?: string[] };
   llm_assistance?: { model: string; prompt_version: string; accepted_suggestions: string[]; rejected_suggestions: string[]; requires_human_review: true } | null;
   authorization_evidence: AdminAuthorizationEvidence[];
 }
