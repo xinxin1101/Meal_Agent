@@ -175,12 +175,14 @@ def promote_published_recipe(
 
     published_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = published_path.with_name(f".{published_path.name}.{uuid4().hex}.tmp")
+    payload = (json.dumps(next_records, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     try:
-        temporary.write_text(json.dumps(next_records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        # Parse the exact candidate catalog before it becomes visible to readers.
-        load_recipes(temporary)
-        with temporary.open("rb") as handle:
+        with temporary.open("wb") as handle:
+            handle.write(payload)
+            handle.flush()
             os.fsync(handle.fileno())
+        # Parse the exact candidate catalog after durable file close and before it becomes visible to readers.
+        load_recipes(temporary)
         os.replace(temporary, published_path)
     finally:
         temporary.unlink(missing_ok=True)
