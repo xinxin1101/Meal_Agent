@@ -340,6 +340,7 @@ class ReviewService:
                 canonical_name=item.canonical_name,
                 display_quantity=item.display_quantity,
                 quantity_kind=item.quantity_kind,
+                quantity_origin=item.quantity_origin,
                 amount_g=item.amount_g,
                 nutrition_calculation_role=item.nutrition_calculation_role,
                 allergens=item.allergens,

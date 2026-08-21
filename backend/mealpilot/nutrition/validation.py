@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
-from mealpilot.domain.models import Nutrition, Recipe
+from mealpilot.domain.models import IngredientQuantityKind, Nutrition, Recipe
 from mealpilot.nutrition.catalog import FoodNutrition
 
 
@@ -31,7 +31,20 @@ class CatalogCoverageReport(BaseModel):
 
 
 def calculate_recipe_from_catalog(recipe: Recipe, foods: list[FoodNutrition]) -> CatalogRecipeMetrics:
-    """Calculate nutrition only from measured ingredients; never invent qualitative grams."""
+    """Calculate nutrition only from measured ingredients; never invent qualitative or unspecified grams."""
+
+    included = [item for item in recipe.ingredients if item.nutrition_calculation_role == "INCLUDED"]
+    unspecified_quantity = sorted({
+        item.canonical_id for item in included if item.quantity_kind == IngredientQuantityKind.UNSPECIFIED
+    })
+    if unspecified_quantity:
+        return CatalogRecipeMetrics(
+            nutrition_per_serving=None,
+            missing_nutrition_ids=[],
+            unresolved_quantity_ids=unspecified_quantity,
+            nutrition_data_version=None,
+            warnings=["NUTRITION_QUANTITY_INCOMPLETE"],
+        )
 
     if recipe.nutrition_basis in {"SOURCE_DECLARED", "REVIEWED_STANDARD_PORTION"} and recipe.nutrition_per_serving is not None:
         return CatalogRecipeMetrics(
@@ -43,7 +56,6 @@ def calculate_recipe_from_catalog(recipe: Recipe, foods: list[FoodNutrition]) ->
         )
 
     catalog = {food.canonical_id: food for food in foods}
-    included = [item for item in recipe.ingredients if item.nutrition_calculation_role == "INCLUDED"]
     missing_nutrition = sorted({item.canonical_id for item in included if item.canonical_id not in catalog})
     unresolved_quantity = sorted({item.canonical_id for item in included if item.amount_g is None})
     warnings: list[str] = []
