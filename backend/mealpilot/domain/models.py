@@ -34,6 +34,13 @@ class NutritionGoal(StrEnum):
 class IngredientQuantityKind(StrEnum):
     MEASURED = "MEASURED"
     QUALITATIVE = "QUALITATIVE"
+    UNSPECIFIED = "UNSPECIFIED"
+
+
+class QuantityOrigin(StrEnum):
+    SOURCE_EXPLICIT = "SOURCE_EXPLICIT"
+    DISPLAY_FALLBACK = "DISPLAY_FALLBACK"
+    REVIEWER_CONFIRMED = "REVIEWER_CONFIRMED"
 
 
 class SolverStatus(StrEnum):
@@ -71,6 +78,7 @@ class RecipeIngredient(BaseModel):
     canonical_name: str
     display_quantity: str = Field(min_length=1, max_length=100)
     quantity_kind: IngredientQuantityKind
+    quantity_origin: QuantityOrigin = QuantityOrigin.SOURCE_EXPLICIT
     amount_g: PositiveDecimal | None = None
     nutrition_calculation_role: Literal["INCLUDED", "EXCLUDED_MINOR_INGREDIENT"] = "INCLUDED"
     allergens: list[str] = Field(default_factory=list)
@@ -80,8 +88,10 @@ class RecipeIngredient(BaseModel):
     def quantity_contract(self) -> "RecipeIngredient":
         if self.quantity_kind == IngredientQuantityKind.MEASURED and self.amount_g is None:
             raise ValueError("MEASURED ingredient requires amount_g")
-        if self.quantity_kind == IngredientQuantityKind.QUALITATIVE and self.amount_g is not None:
-            raise ValueError("QUALITATIVE ingredient cannot carry amount_g")
+        if self.quantity_kind in {IngredientQuantityKind.QUALITATIVE, IngredientQuantityKind.UNSPECIFIED} and self.amount_g is not None:
+            raise ValueError("non-measured ingredient cannot carry amount_g")
+        if self.quantity_origin == QuantityOrigin.DISPLAY_FALLBACK and self.quantity_kind != IngredientQuantityKind.UNSPECIFIED:
+            raise ValueError("DISPLAY_FALLBACK is only valid for UNSPECIFIED quantity")
         if self.nutrition_calculation_role == "EXCLUDED_MINOR_INGREDIENT" and self.quantity_kind != IngredientQuantityKind.QUALITATIVE:
             raise ValueError("only a qualitative ingredient may be excluded as a minor ingredient")
         return self
@@ -132,6 +142,10 @@ class Recipe(BaseModel):
     def solver_ready_recipe_has_nutrition(self) -> "Recipe":
         if self.solver_eligible and (self.nutrition_per_serving is None or self.nutrition_basis is None):
             raise ValueError("solver-eligible recipe requires an authoritative nutrition basis")
+        if self.solver_eligible and any(
+            ingredient.quantity_kind == IngredientQuantityKind.UNSPECIFIED for ingredient in self.ingredients
+        ):
+            raise ValueError("solver-eligible recipe cannot contain unspecified quantities")
         return self
 
 
