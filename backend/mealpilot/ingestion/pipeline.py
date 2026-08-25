@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mealpilot.domain.models import Recipe
+from mealpilot.domain.models import ReadableRecipe, Recipe
 
 
 class StagedRecipe(BaseModel):
@@ -103,3 +103,27 @@ def withdraw(recipe_id: str, version: str, published_path: Path, dataset_version
         withdrawn_at=datetime.now().astimezone(),
         dataset_version=dataset_version,
     )
+
+
+def readable_recipe_content_hash(recipe: ReadableRecipe) -> str:
+    canonical = json.dumps(recipe.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def publish_readable(recipe: ReadableRecipe, published_path: Path, dataset_version: str) -> PublishReceipt:
+    """Publish a reviewed cooking reference without promoting it to planning."""
+
+    if not recipe.cooking_steps:
+        raise DataQualityError("COOKING_STEPS_MISSING")
+    if not recipe.ingredients:
+        raise DataQualityError("RAW_INGREDIENTS_MISSING")
+    existing = json.loads(published_path.read_text(encoding="utf-8")) if published_path.exists() else []
+    if any(item["recipe_id"] == recipe.recipe_id and item["version"] == recipe.version for item in existing):
+        raise DataQualityError("RECIPE_VERSION_ALREADY_PUBLISHED")
+    existing.append(recipe.model_dump(mode="json"))
+    _write_json_atomic(published_path, existing)
+    return PublishReceipt(recipe_id=recipe.recipe_id, version=recipe.version, published_at=datetime.now().astimezone(), dataset_version=dataset_version)
+
+
+def withdraw_readable(recipe_id: str, version: str, published_path: Path, dataset_version: str) -> WithdrawalReceipt:
+    return withdraw(recipe_id, version, published_path, dataset_version)

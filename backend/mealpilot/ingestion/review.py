@@ -10,10 +10,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from mealpilot.domain.models import Recipe, RecipeIngredient, SourceMetadata
-from mealpilot.ingestion.pipeline import PublishReceipt, StagedRecipe, WithdrawalReceipt, publish, recipe_content_hash, withdraw
+from mealpilot.domain.models import ReadableRecipe, ReadableRecipeIngredient, Recipe, RecipeIngredient, SourceMetadata
+from mealpilot.ingestion.pipeline import PublishReceipt, StagedRecipe, WithdrawalReceipt, publish, publish_readable, recipe_content_hash, withdraw, withdraw_readable
 from mealpilot.ingestion.quality import RecipeCuration, RecipeQualityReport, StructuredRecipeDraft, build_quality_draft
-from mealpilot.ingestion.llm_assist import LlmAssistanceRecord, apply_proposal, request_curation_proposal
+from mealpilot.ingestion.llm_assist import LLM_FAILURE_CODES, LlmAssistanceRecord, apply_proposal, request_curation_proposal
 from mealpilot.ingestion.sources.meishichina.models import RawMeishiChinaRecipe
 from mealpilot.nutrition.catalog import FoodNutrition
 
@@ -48,7 +48,7 @@ class AuthorizationEvidence(BaseModel):
 
 class ReviewEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    event_type: Literal["CREATED", "LLM_ASSISTED", "LLM_FAILED", "CURATED", "EVIDENCE_ADDED", "APPROVED", "REJECTED", "PUBLISHED", "REVOKED"]
+    event_type: Literal["CREATED", "LLM_ASSISTED", "LLM_FAILED", "CURATED", "MIGRATED", "EVIDENCE_ADDED", "READABLE_PUBLISHED", "READABLE_REVOKED", "APPROVED", "REJECTED", "PUBLISHED", "REVOKED"]
     occurred_at: datetime
     actor: str
     reason: str | None = None
@@ -63,6 +63,10 @@ class RecipeReviewItem(BaseModel):
     status: Literal["PENDING", "APPROVED", "REJECTED", "PUBLISHED", "REVOKED"]
     processing_stage: Literal["INITIAL_VALIDATED", "LLM_FAILED", "FINAL_VALIDATION_BLOCKED", "FINAL_VALIDATED"] = "INITIAL_VALIDATED"
     processing_errors: list[str] = Field(default_factory=list)
+    # Migration warnings are deliberately separate from LLM/quality failures:
+    # they describe the audit lineage of historic records and must not be
+    # mistaken for facts supplied by a model or source page.
+    migration_warnings: list[str] = Field(default_factory=list)
     source_use_scope: Literal["PERSONAL_STUDY_INTERNAL"] = "PERSONAL_STUDY_INTERNAL"
     raw: RawMeishiChinaRecipe
     curation: RecipeCuration
@@ -71,6 +75,7 @@ class RecipeReviewItem(BaseModel):
     llm_assistance: LlmAssistanceRecord | None = None
     authorization_evidence: list[AuthorizationEvidence] = Field(default_factory=list)
     staged_recipe: StagedRecipe | None = None
+    readable_publish_receipt: PublishReceipt | None = None
     publish_receipt: PublishReceipt | None = None
     withdrawal_receipt: WithdrawalReceipt | None = None
     events: list[ReviewEvent]
@@ -189,7 +194,7 @@ class ReviewService:
         next_stage = item.processing_stage
         processing_errors = item.processing_errors
         if item.llm_assistance is not None:
-            next_stage = "FINAL_VALIDATED" if report.status != "BLOCKED" else "FINAL_VALIDATION_BLOCKED"
+            next_stage = "FINAL_VALIDATED" if report.readable_eligible else "FINAL_VALIDATION_BLOCKED"
             processing_errors = []
         updated = item.model_copy(update={"curation": curation, "draft": draft, "quality_report": report, "processing_stage": next_stage, "processing_errors": processing_errors, "events": [*item.events, event]})
         return self.store.update(updated, expected_version)
@@ -211,7 +216,7 @@ class ReviewService:
             "draft": draft,
             "quality_report": report,
             "llm_assistance": record,
-            "processing_stage": "FINAL_VALIDATED" if report.status != "BLOCKED" else "FINAL_VALIDATION_BLOCKED",
+            "processing_stage": "FINAL_VALIDATED" if report.readable_eligible else "FINAL_VALIDATION_BLOCKED",
             "processing_errors": [],
             "events": [*item.events, event],
         })
@@ -221,19 +226,7 @@ class ReviewService:
         item = self.store.get(review_id)
         if item.status != "PENDING":
             raise ReviewRejected("ONLY_PENDING_REVIEW_CAN_RECORD_PROCESSING_FAILURE")
-        safe_codes = {
-            "SILICONFLOW_NOT_CONFIGURED",
-            "LLM_PROVIDER_FAILED",
-            "LLM_EMPTY_RESPONSE",
-            "LLM_OUTPUT_SCHEMA_INVALID",
-            "LLM_RESPONSE_INCOMPLETE",
-            "LLM_LEGACY_PATCH_NOT_ALLOWED",
-            "LLM_INGREDIENT_COVERAGE_MISMATCH",
-            "LLM_INGREDIENT_SOURCE_BINDING_INVALID",
-            "LLM_STEP_COVERAGE_MISMATCH",
-            "LLM_CANONICAL_ID_NOT_ALLOWED",
-        }
-        safe_code = error_code if error_code in safe_codes else "LLM_PROCESSING_FAILED"
+        safe_code = error_code if error_code in LLM_FAILURE_CODES else "LLM_PROCESSING_FAILED"
         event = ReviewEvent(event_type="LLM_FAILED", occurred_at=datetime.now(timezone.utc), actor=actor, reason=safe_code)
         updated = item.model_copy(update={"processing_stage": "LLM_FAILED", "processing_errors": [safe_code], "events": [*item.events, event]})
         return self.store.update(updated, expected_version)
@@ -258,6 +251,8 @@ class ReviewService:
             raise ReviewRejected("PUBLICATION_READY_REQUIRED")
         if item.processing_stage != "FINAL_VALIDATED":
             raise ReviewRejected("FINAL_LLM_STRUCTURE_AND_VALIDATION_REQUIRED")
+        if item.migration_warnings:
+            raise ReviewRejected("SOURCE_AUDIT_MIGRATION_REVIEW_REQUIRED")
         recipe = self._to_recipe(item.draft)
         staged = StagedRecipe(
             staging_id=item.raw.staging_id,
@@ -278,6 +273,34 @@ class ReviewService:
         updated = item.model_copy(update={"status": "APPROVED", "staged_recipe": staged, "events": [*item.events, event]})
         return self.store.update(updated, expected_version)
 
+    def publish_readable(self, review_id: str, expected_version: int, actor: str, published_path: Path, dataset_version: str) -> RecipeReviewItem:
+        """Publish an executable source recipe without making menu/nutrition claims."""
+
+        item = self.store.get(review_id)
+        if item.status != "PENDING":
+            raise ReviewRejected("ONLY_PENDING_REVIEW_CAN_PUBLISH_READABLE")
+        if item.processing_stage != "FINAL_VALIDATED" or not item.quality_report.readable_eligible:
+            raise ReviewRejected("READABLE_REVIEW_REQUIRED")
+        if item.migration_warnings:
+            raise ReviewRejected("SOURCE_AUDIT_MIGRATION_REVIEW_REQUIRED")
+        if item.readable_publish_receipt is not None:
+            raise ReviewRejected("READABLE_RECIPE_ALREADY_PUBLISHED")
+        receipt = publish_readable(self._to_readable_recipe(item.draft), published_path, dataset_version)
+        event = ReviewEvent(event_type="READABLE_PUBLISHED", occurred_at=datetime.now(timezone.utc), actor=actor)
+        updated = item.model_copy(update={"readable_publish_receipt": receipt, "events": [*item.events, event]})
+        return self.store.update(updated, expected_version)
+
+    def revoke_readable(self, review_id: str, expected_version: int, actor: str, reason: str, published_path: Path, dataset_version: str) -> RecipeReviewItem:
+        if not reason.strip():
+            raise ValueError("revocation reason is required")
+        item = self.store.get(review_id)
+        if item.readable_publish_receipt is None:
+            raise ReviewRejected("READABLE_RECIPE_NOT_PUBLISHED")
+        receipt = withdraw_readable(item.readable_publish_receipt.recipe_id, item.readable_publish_receipt.version, published_path, dataset_version)
+        event = ReviewEvent(event_type="READABLE_REVOKED", occurred_at=datetime.now(timezone.utc), actor=actor, reason=reason.strip())
+        updated = item.model_copy(update={"readable_publish_receipt": None, "withdrawal_receipt": receipt, "events": [*item.events, event]})
+        return self.store.update(updated, expected_version)
+
     def reject(self, review_id: str, expected_version: int, actor: str, reason: str) -> RecipeReviewItem:
         if not reason.strip():
             raise ValueError("rejection reason is required")
@@ -291,6 +314,8 @@ class ReviewService:
         item = self.store.get(review_id)
         if item.status != "APPROVED" or item.staged_recipe is None:
             raise ReviewRejected("REVIEW_NOT_APPROVED")
+        if item.migration_warnings:
+            raise ReviewRejected("SOURCE_AUDIT_MIGRATION_REVIEW_REQUIRED")
         receipt = publish(item.staged_recipe, published_path, dataset_version)
         event = ReviewEvent(event_type="PUBLISHED", occurred_at=datetime.now(timezone.utc), actor=actor)
         updated = item.model_copy(update={"status": "PUBLISHED", "publish_receipt": receipt, "events": [*item.events, event]})
@@ -366,6 +391,33 @@ class ReviewService:
             ),
             numeric_policy_version=draft.numeric_policy_version,
             nutrition_data_version=draft.nutrition_data_version,
+        )
+
+    def _to_readable_recipe(self, draft: StructuredRecipeDraft) -> ReadableRecipe:
+        return ReadableRecipe(
+            recipe_id=draft.recipe_id,
+            version=draft.version,
+            title=draft.title,
+            supported_slots=draft.supported_slots,
+            servings=draft.servings,
+            prep_minutes=draft.prep_minutes,
+            ingredients=[
+                ReadableRecipeIngredient(
+                    group=item.group,
+                    raw_name=item.raw_name,
+                    display_quantity=item.display_quantity,
+                )
+                for item in draft.ingredients
+            ],
+            cooking_steps=draft.cooking_steps,
+            source=SourceMetadata(
+                source_id=draft.source_id,
+                source_url=draft.source_url,
+                license="PERSONAL_STUDY_INTERNAL",
+                data_version=draft.source_content_hash[:12],
+            ),
+            warnings=draft.removed_presentation_step_numbers and ["PRESENTATION_ONLY_STEPS_EXCLUDED"] or [],
+            numeric_policy_version=draft.numeric_policy_version,
         )
 
 

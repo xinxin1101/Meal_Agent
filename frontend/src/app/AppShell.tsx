@@ -3,10 +3,11 @@ import { Icon } from "../components/ui/Icon";
 import type { AccountSummary } from "../api/types";
 import { useAuth } from "../context/AuthContext";
 
-export type AppPage = "plan" | "history" | "assistant" | "profile" | "admin-recipes";
+export type AppPage = "plan" | "recipes" | "history" | "assistant" | "profile" | "admin-recipes";
 
 const navItems = [
   { id: "plan", label: "今日计划", icon: "calendar" },
+  { id: "recipes", label: "菜谱库", icon: "nutrition" },
   { id: "history", label: "历史计划", icon: "history" },
   { id: "assistant", label: "对话助手", icon: "chat" },
   { id: "profile", label: "偏好与档案", icon: "profile" },

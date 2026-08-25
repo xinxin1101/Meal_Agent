@@ -45,7 +45,7 @@ export function PlanningComposer({ planningMode, query, constraints, parseNotice
       <button className="button button-secondary" type="button" onClick={onSuggestTargets} disabled={targetSuggestionLoading || submitting}>{targetSuggestionLoading ? "估算中…" : "生成估算建议"}</button>
       {targetSuggestion && <div className="nutrition-suggestion-result"><p><b>{targetSuggestion.energy_kcal_range.min}–{targetSuggestion.energy_kcal_range.max} kcal</b> · 蛋白质至少 <b>{targetSuggestion.protein_min_g} g</b></p><small>策略 {targetSuggestion.policy_version}；静息能量估算 {targetSuggestion.resting_energy_kcal} kcal。仅供健康成年人规划参考。</small><button className="button button-primary" type="button" onClick={onApplySuggestion}>确认并应用到本次目标</button></div>}
     </section>}
-    {planningMode === "menu_draft" && <div className="draft-boundary-note" role="note"><Icon name="shield" size={18}/><span>普通菜单草稿不会验证能量或蛋白质，也不能作为医疗或过敏安全结论。有营养数据时才会显示；资料不完整时不会生成估算数字。</span></div>}
+    {planningMode === "menu_draft" && <div className="draft-boundary-note" role="note"><Icon name="shield" size={18}/><span>普通菜单草稿会按已声明的过敏原和忌口进行保守筛选，但不会验证能量或蛋白质，也不能替代医疗或完整过敏原安全结论。有营养数据时才会显示；资料不完整时不会生成估算数字。</span></div>}
     {planningMode === "verified_nutrition" && <label className="history-consent"><input type="checkbox" checked={useHistory} onChange={(event) => onUseHistoryChange(event.target.checked)} disabled={!historyCount}/><span>使用最近的已采用计划优化菜品多样性{historyCount ? `（当前 ${historyCount} 条）` : "（暂无历史）"}。历史只影响低优先级软目标，不会放宽安全、营养或时间约束。</span></label>}
     {readinessMessage && <div className="notice" role="status">{readinessMessage}</div>}
     {error && <div className="notice error" role="alert">{error}</div>}

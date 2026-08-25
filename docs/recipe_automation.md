@@ -32,7 +32,7 @@ Use the ADMIN-only workbench to compare source data with the LLM-generated page 
 
 ## Automatic publication hard stop
 
-Acquisition never publishes automatically. The Worker stops after LLM structuring and deterministic final validation. Only an administrator-selected `PUBLICATION_READY` or `SOLVER_READY` record can be approved and published, individually or in a batch. Only `SOLVER_READY` recipes can participate in meal planning.
+Acquisition never publishes automatically. The Worker queues LLM structuring work and later claims it through the same durable process; it then performs deterministic final validation. This makes provider latency observable without holding an HTTP request open. Only an administrator-selected `PUBLICATION_READY` or `SOLVER_READY` record can be approved and published, individually or in a batch. Only `SOLVER_READY` recipes can participate in meal planning.
 
 Formal catalog publication in this workflow means availability inside the user's private personal-study MealPilot instance. It is not permission to publicly reproduce or redistribute source content.
 

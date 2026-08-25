@@ -104,7 +104,7 @@ def test_admin_supplied_quantity_is_marked_reviewer_confirmed() -> None:
         servings=Decimal("2"),
         supported_slots=["lunch", "dinner"],
         prep_minutes=10,
-        ingredients=[AdminIngredientPatch(raw_name="牛肉", canonical_id="beef", amount=Decimal("180"), unit="g")],
+        ingredients=[AdminIngredientPatch(source_index=0, raw_name="牛肉", canonical_id="beef", amount=Decimal("180"), unit="g")],
     )
     curation = build_trusted_curation(raw, command)
     assert curation.ingredient_overrides[0].quantity_origin == QuantityOrigin.REVIEWER_CONFIRMED

@@ -29,6 +29,7 @@ class CanonicalIngredientOption(BaseModel):
 
 class AdminIngredientPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    source_index: int = Field(ge=0)
     raw_name: str = Field(min_length=1, max_length=200)
     canonical_id: str | None = Field(default=None, max_length=100)
     amount: Decimal | None = Field(default=None, gt=0)
@@ -66,11 +67,17 @@ class AdminPublishCommand(AdminReviewVersionCommand):
     dataset_version: str = Field(min_length=1, max_length=100)
 
 
+class AdminRevokeCommand(AdminReviewVersionCommand):
+    reason: str = Field(min_length=1, max_length=500)
+    dataset_version: str = Field(min_length=1, max_length=100)
+
+
 class AdminReviewDetail(BaseModel):
     model_config = ConfigDict(extra="forbid")
     review: RecipeReviewItem
     canonical_ingredients: list[CanonicalIngredientOption]
     can_approve: bool
+    can_publish_readable: bool
     can_publish: bool
 
 
@@ -90,7 +97,7 @@ class AdminBatchPublishCommand(BaseModel):
 class AdminBatchPublishResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     review_id: str
-    status: Literal["PUBLISHED", "FAILED"]
+    status: Literal["PUBLISHED", "READABLE_PUBLISHED", "FAILED"]
     review_version: int | None = None
     reason_code: str | None = None
 
@@ -131,18 +138,18 @@ def canonical_options(raw: RawMeishiChinaRecipe | None = None) -> list[Canonical
 
 
 def build_trusted_curation(raw: RawMeishiChinaRecipe, command: AdminReviewCurationCommand) -> RecipeCuration:
-    raw_by_name = {normalize_name(item.raw_name): item for item in raw.ingredients}
     options = {item.canonical_id: item for item in canonical_options(raw)}
-    seen: set[str] = set()
+    seen: set[int] = set()
     overrides: list[IngredientOverride] = []
     for patch in command.ingredients:
-        key = normalize_name(patch.raw_name)
-        source = raw_by_name.get(key)
-        if source is None:
-            raise ValueError(f"ingredient is not present in source: {patch.raw_name}")
-        if key in seen:
-            raise ValueError(f"duplicate ingredient patch: {patch.raw_name}")
-        seen.add(key)
+        if patch.source_index >= len(raw.ingredients):
+            raise ValueError(f"ingredient source index is not present: {patch.source_index}")
+        source = raw.ingredients[patch.source_index]
+        if normalize_name(source.raw_name) != normalize_name(patch.raw_name):
+            raise ValueError(f"ingredient name does not match source index: {patch.source_index}")
+        if patch.source_index in seen:
+            raise ValueError(f"duplicate ingredient patch index: {patch.source_index}")
+        seen.add(patch.source_index)
         if patch.canonical_id is None:
             continue
         option = options.get(patch.canonical_id)
@@ -156,7 +163,7 @@ def build_trusted_curation(raw: RawMeishiChinaRecipe, command: AdminReviewCurati
         if patch.amount is not None or (patch.qualitative_label is not None and patch.qualitative_label != source_label):
             quantity_origin = QuantityOrigin.REVIEWER_CONFIRMED
         overrides.append(IngredientOverride(
-            raw_name=source.raw_name, canonical_id=option.canonical_id,
+            source_index=patch.source_index, raw_name=source.raw_name, canonical_id=option.canonical_id,
             canonical_name=option.canonical_name, amount=patch.amount, unit=patch.unit,
             qualitative_label=label, quantity_origin=quantity_origin,
             nutrition_calculation_role=patch.nutrition_calculation_role,

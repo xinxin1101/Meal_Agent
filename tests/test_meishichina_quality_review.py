@@ -225,6 +225,22 @@ def test_quality_gate_blocks_image_dependent_step() -> None:
     assert report.image_independent_steps is False
 
 
+def test_readable_recipe_can_publish_without_slots_servings_or_time(tmp_path: Path) -> None:
+    raw = _raw_recipe().model_copy(update={"source_time_label": None, "categories": []})
+    service = _service(tmp_path)
+    item = service.prepare(raw, actor="crawler")
+    assert item.quality_report.status == "BLOCKED"
+    assert item.quality_report.readable_eligible is True
+    assert {"SERVINGS_MISSING", "TIME_MISSING", "MEAL_SLOTS_MISSING"}.issubset(item.quality_report.blocking_reasons)
+    item = service.store.update(item.model_copy(update={"processing_stage": "FINAL_VALIDATED"}), expected_version=item.review_version)
+    item = service.publish_readable(item.review_id, item.review_version, "reviewer", tmp_path / "readable.json", "r39-test")
+    assert item.readable_publish_receipt is not None
+    published = json.loads((tmp_path / "readable.json").read_text(encoding="utf-8"))
+    assert published[0]["title"] == raw.title
+    assert published[0]["servings"] is None
+    assert published[0]["supported_slots"] == []
+
+
 def test_admin_cannot_publish_before_llm_structure_and_final_validation(tmp_path: Path) -> None:
     service = _service(tmp_path)
     item = service.prepare(_raw_recipe(), actor="test")

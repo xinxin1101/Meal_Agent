@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from mealpilot.agent.analyze import extract_supported_constraints
 from mealpilot.agent.workflow import run_agent
 from mealpilot.data.loader import load_recipe_sets
-from mealpilot.domain.models import AccountProfile, AccountSummary, AdminRecipeCatalogItem, AdoptedMealPlan, AdoptPlanCommand, AgentPlanningCommand, AgentRunResult, AuthSession, ChatRequest, ChatResponse, ConversationDetail, ConversationSummary, CreateConversationCommand, DeleteAccountCommand, DeterministicPlanningCommand, DurableRunSnapshot, FeedbackCollection, HistoryCollection, LoginCommand, MealPlan, MenuDraft, MenuDraftCommand, MenuDraftFailure, NutritionTargetSuggestion, PlanFeedback, PlanningFailure, PreferenceMemory, PrivacyPolicy, ProductReadiness, RegisterCommand, RunAuditSummary, RunCancelCommand, RunDecisionCommand, SaveAccountProfileCommand, SavePlanFeedbackCommand, UserProfile, MealSlot
+from mealpilot.domain.models import AccountProfile, AccountSummary, AdminRecipeCatalogItem, AdoptedMealPlan, AdoptPlanCommand, AgentPlanningCommand, AgentRunResult, AuthSession, ChatRequest, ChatResponse, ConversationDetail, ConversationSummary, CreateConversationCommand, DeleteAccountCommand, DeterministicPlanningCommand, DurableRunSnapshot, FeedbackCollection, HistoryCollection, LoginCommand, MealPlan, MenuDraft, MenuDraftCommand, MenuDraftFailure, NutritionTargetSuggestion, PlanFeedback, PlanningFailure, PreferenceMemory, PrivacyPolicy, ProductReadiness, ReadableRecipe, ReadableRecipeIngredient, RegisterCommand, RunAuditSummary, RunCancelCommand, RunDecisionCommand, SaveAccountProfileCommand, SavePlanFeedbackCommand, UserProfile, MealSlot
 from mealpilot.nutrition.loaders import load_food_catalog
 from mealpilot.nutrition.validation import CatalogCoverageReport, audit_catalog_coverage, calculate_recipe_from_catalog, materialize_catalog_recipes
 from mealpilot.nutrition.targets import suggest_targets
@@ -29,8 +29,9 @@ from mealpilot.conversation.store import ConversationConflict, ConversationStore
 from mealpilot.production.settings import load_production_settings
 from mealpilot.auth.security import issue_access_token, load_auth_settings, verify_access_token
 from mealpilot.auth.store import AccountConflict, AuthenticationFailed, SqliteAccountStore
-from mealpilot.ingestion.admin import AdminBatchPublishCommand, AdminBatchPublishResponse, AdminBatchPublishResult, AdminPublishCommand, AdminReviewCurationCommand, AdminReviewDetail, AdminReviewVersionCommand, build_trusted_curation, canonical_options
+from mealpilot.ingestion.admin import AdminBatchPublishCommand, AdminBatchPublishResponse, AdminBatchPublishResult, AdminPublishCommand, AdminRevokeCommand, AdminReviewCurationCommand, AdminReviewDetail, AdminReviewVersionCommand, build_trusted_curation, canonical_options
 from mealpilot.ingestion.idempotency import ReviewIdempotencyStore
+from mealpilot.ingestion.llm_jobs import CancelLlmReviewJobCommand, CreateLlmReviewJobCommand, LlmReviewJob, LlmReviewJobConflict, LlmReviewJobStore
 from mealpilot.ingestion.review import ReviewConflict, ReviewRejected, ReviewService, ReviewStore
 from mealpilot.ingestion.settings import load_recipe_data_paths
 from mealpilot.ingestion.acquisition import list_source_policies, load_source_policy, policy_summary
@@ -76,6 +77,7 @@ recipe_data_paths = load_recipe_data_paths(PROJECT_ROOT)
 recipe_review_store = ReviewStore(recipe_data_paths.reviews)
 recipe_review_idempotency = ReviewIdempotencyStore(recipe_data_paths.jobs.parent / "review-idempotency.sqlite3")
 recipe_acquisition_jobs = RecipeAcquisitionJobStore(recipe_data_paths.jobs)
+llm_review_jobs = LlmReviewJobStore(recipe_data_paths.llm_jobs)
 
 if production_settings.rate_limit_per_minute:
     from mealpilot.production.observability import MetricsMiddleware, RateLimitMiddleware
@@ -165,6 +167,42 @@ def _published_recipe_path() -> Path:
     return Path(os.getenv("MEALPILOT_PUBLISHED_RECIPES_PATH", str(recipe_data_paths.published))).resolve()
 
 
+def _readable_recipe_path() -> Path:
+    return Path(os.getenv("MEALPILOT_READABLE_RECIPES_PATH", str(recipe_data_paths.readable_published))).resolve()
+
+
+def _readable_recipes() -> list[ReadableRecipe]:
+    path = _readable_recipe_path()
+    if not path.exists():
+        return []
+    values = json.loads(path.read_text(encoding="utf-8"))
+    return [ReadableRecipe.model_validate(value) for value in values]
+
+
+def _published_readable_recipes() -> list[ReadableRecipe]:
+    """Merge planning recipes and standalone readable records without duplicates."""
+
+    values: dict[tuple[str, str], ReadableRecipe] = {}
+    for recipe in _recipes():
+        if not recipe.cooking_steps:
+            continue
+        values[(recipe.recipe_id, recipe.version)] = ReadableRecipe(
+            recipe_id=recipe.recipe_id,
+            version=recipe.version,
+            title=recipe.title,
+            supported_slots=recipe.supported_slots,
+            servings=recipe.servings,
+            prep_minutes=recipe.prep_minutes,
+            ingredients=[ReadableRecipeIngredient(group="other", raw_name=item.canonical_name, display_quantity=item.display_quantity) for item in recipe.ingredients],
+            cooking_steps=recipe.cooking_steps,
+            source=recipe.source,
+            numeric_policy_version=recipe.numeric_policy_version,
+        )
+    for recipe in _readable_recipes():
+        values.setdefault((recipe.recipe_id, recipe.version), recipe)
+    return sorted(values.values(), key=lambda item: (item.title, item.recipe_id, item.version))
+
+
 def _nutrition_catalog_path() -> Path:
     """Resolve the formal runtime nutrition catalog; sample data is test-only."""
     return Path(os.getenv("MEALPILOT_NUTRITION_DATA_PATH", str(recipe_data_paths.nutrition))).resolve()
@@ -186,8 +224,9 @@ def _admin_review_detail(review_id: str) -> AdminReviewDetail:
         raise HTTPException(status_code=404, detail="recipe review not found") from error
     return AdminReviewDetail(
         review=item, canonical_ingredients=canonical_options(item.raw),
-        can_approve=item.status == "PENDING" and item.processing_stage == "FINAL_VALIDATED" and item.quality_report.status in {"PUBLICATION_READY", "SOLVER_READY"},
-        can_publish=item.status == "APPROVED" and item.staged_recipe is not None,
+        can_approve=item.status == "PENDING" and item.processing_stage == "FINAL_VALIDATED" and item.quality_report.status in {"PUBLICATION_READY", "SOLVER_READY"} and not item.migration_warnings,
+        can_publish_readable=item.status == "PENDING" and item.processing_stage == "FINAL_VALIDATED" and item.quality_report.readable_eligible and item.readable_publish_receipt is None and not item.migration_warnings,
+        can_publish=item.status == "APPROVED" and item.staged_recipe is not None and not item.migration_warnings,
     )
 
 
@@ -273,8 +312,10 @@ def _require_catalog_ready() -> None:
 
 def _product_readiness() -> ProductReadiness:
     recipes = _recipes()
+    readable_recipes = _published_readable_recipes()
     eligible = [recipe for recipe in recipes if recipe.solver_eligible]
     per_slot = {slot: sum(slot in recipe.supported_slots for recipe in eligible) for slot in MealSlot}
+    menu_slot_counts = {slot: sum(slot in recipe.supported_slots for recipe in recipes) for slot in MealSlot}
     coverage = _catalog_coverage()
     reasons: list[str] = []
     if not recipes:
@@ -294,6 +335,10 @@ def _product_readiness() -> ProductReadiness:
         ready=not reasons, reason_codes=reasons, published_recipe_count=len(recipes),
         solver_eligible_count=len(eligible), per_slot_count=per_slot,
         catalog_coverage_complete=coverage.complete,
+        display_recipe_count=len(readable_recipes),
+        menu_draft_recipe_count=len(recipes),
+        menu_draft_per_slot_count=menu_slot_counts,
+        menu_draft_slot_coverage_complete=all(menu_slot_counts[slot] > 0 for slot in MealSlot),
     )
 
 
@@ -302,14 +347,34 @@ def health() -> dict[str, str]:
     return {"status": "ok", "milestone": "frozen-mvp"}
 
 
+@app.get("/v1/recipes", response_model=list[ReadableRecipe], tags=["recipes"])
+def readable_recipe_catalog(_: AccountSummary = Depends(current_account)) -> list[ReadableRecipe]:
+    """Return cooking references only; this endpoint makes no planning claims."""
+
+    return _published_readable_recipes()
+
+
 @app.get("/ready", tags=["system"])
-def ready() -> dict[str, str]:
+def ready() -> dict[str, str | bool]:
     if production_settings.postgres_enabled:
         try:
             durable_runs.store.events_after("readiness-probe", 0)
         except Exception as error:
             raise HTTPException(status_code=503, detail="database unavailable") from error
-    return {"status": "ready", "storage": "postgresql" if production_settings.postgres_enabled else "sqlite"}
+    return {
+        "status": "ready",
+        "storage": "postgresql" if production_settings.postgres_enabled else "sqlite",
+        "product_ready": _product_readiness().ready,
+    }
+
+
+@app.get("/ready/product", tags=["system"])
+def ready_product() -> dict[str, str]:
+    """Strict readiness for endpoints that promise a nutrition-validated plan."""
+    readiness = _product_readiness()
+    if not readiness.ready:
+        raise HTTPException(status_code=503, detail={"reason_code": "PRODUCT_NOT_READY", "product_readiness": readiness.model_dump(mode="json")})
+    return {"status": "ready", "capability": "nutrition_validated_planning"}
 
 
 @app.get("/metrics", include_in_schema=False)
@@ -409,7 +474,11 @@ def admin_recipes(_: AccountSummary = Depends(current_admin)) -> list[AdminRecip
         title=recipe.title, origin="ACTIVE_CATALOG", lifecycle_status="ACTIVE",
         quality_status="SOLVER_READY" if recipe.solver_eligible else "PUBLICATION_READY",
         processing_stage=None,
-        solver_eligible=recipe.solver_eligible, supported_slots=recipe.supported_slots,
+        solver_eligible=recipe.solver_eligible,
+        readable_eligible=True,
+        readable_published=True,
+        menu_draft_eligible=True,
+        supported_slots=recipe.supported_slots,
         servings=recipe.servings, prep_minutes=recipe.prep_minutes, ingredients=recipe.ingredients,
         cooking_steps=recipe.cooking_steps, source_id=recipe.source.source_id,
         source_url=recipe.source.source_url, license=recipe.source.license,
@@ -418,11 +487,20 @@ def admin_recipes(_: AccountSummary = Depends(current_admin)) -> list[AdminRecip
     ) for recipe in _recipes()]
     for review in recipe_review_store.list():
         ingredients = [ingredient for ingredient in review.draft.ingredients if ingredient.canonical_id and ingredient.canonical_name and ingredient.quantity_kind]
+        readable_eligible = review.quality_report.readable_eligible
+        menu_draft_eligible = (
+            review.processing_stage == "FINAL_VALIDATED"
+            and review.quality_report.status in {"PUBLICATION_READY", "SOLVER_READY"}
+        )
         items.append(AdminRecipeCatalogItem(
             record_id=review.review_id, recipe_id=review.draft.recipe_id, title=review.draft.title,
             origin="REVIEW_QUEUE", lifecycle_status=review.status, quality_status=review.quality_report.status,
             processing_stage=review.processing_stage,
-            solver_eligible=False, supported_slots=review.draft.supported_slots, servings=review.draft.servings,
+            solver_eligible=False,
+            readable_eligible=readable_eligible,
+            readable_published=review.readable_publish_receipt is not None,
+            menu_draft_eligible=menu_draft_eligible,
+            supported_slots=review.draft.supported_slots, servings=review.draft.servings,
             prep_minutes=review.draft.prep_minutes,
             ingredients=[{
                 "canonical_id": ingredient.canonical_id, "canonical_name": ingredient.canonical_name,
@@ -463,18 +541,91 @@ def admin_batch_publish_reviews(command: AdminBatchPublishCommand, idempotency_k
     return AdminBatchPublishResponse(published_count=published_count, failed_count=len(results) - published_count, results=results)
 
 
+@app.post("/v1/admin/reviews/batch-publish-readable", response_model=AdminBatchPublishResponse, tags=["admin"])
+def admin_batch_publish_readable_reviews(command: AdminBatchPublishCommand, idempotency_key: str = Header(..., alias="Idempotency-Key"), account: AccountSummary = Depends(current_admin)) -> AdminBatchPublishResponse:
+    results: list[AdminBatchPublishResult] = []
+    for target in command.items:
+        try:
+            published = _admin_review_mutation(
+                f"batch-publish-readable:{target.review_id}",
+                f"{idempotency_key}:readable:{target.review_id}",
+                AdminPublishCommand(expected_review_version=target.expected_review_version, dataset_version=command.dataset_version),
+                lambda target=target: _recipe_review_service().publish_readable(target.review_id, target.expected_review_version, account.email, _readable_recipe_path(), command.dataset_version),
+            )
+            results.append(AdminBatchPublishResult(review_id=target.review_id, status="READABLE_PUBLISHED", review_version=published.review_version))
+        except HTTPException as error:
+            detail = error.detail if isinstance(error.detail, str) else "BATCH_ITEM_FAILED"
+            results.append(AdminBatchPublishResult(review_id=target.review_id, status="FAILED", reason_code=detail))
+    published_count = sum(item.status == "READABLE_PUBLISHED" for item in results)
+    return AdminBatchPublishResponse(published_count=published_count, failed_count=len(results) - published_count, results=results)
+
+
 @app.get("/v1/admin/reviews/{review_id}", response_model=AdminReviewDetail, tags=["admin"])
 def admin_review_detail(review_id: str, _: AccountSummary = Depends(current_admin)) -> AdminReviewDetail:
     return _admin_review_detail(review_id)
 
 
-@app.post("/v1/admin/reviews/{review_id}/assist", response_model=AdminReviewDetail, tags=["admin"])
-def admin_assist_review(review_id: str, command: AdminReviewVersionCommand, idempotency_key: str = Header(..., alias="Idempotency-Key"), account: AccountSummary = Depends(current_admin)) -> AdminReviewDetail:
-    _admin_review_mutation(
-        f"assist:{review_id}", idempotency_key, command,
-        lambda: _recipe_review_service().assist(review_id, command.expected_review_version, account.email),
-    )
-    return _admin_review_detail(review_id)
+@app.post("/v1/admin/reviews/{review_id}/assist", response_model=LlmReviewJob, status_code=202, tags=["admin"])
+def admin_assist_review(review_id: str, command: CreateLlmReviewJobCommand, idempotency_key: str = Header(..., alias="Idempotency-Key"), account: AccountSummary = Depends(current_admin)) -> LlmReviewJob:
+    try:
+        item = recipe_review_store.get(review_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="recipe review not found") from error
+    if item.status != "PENDING":
+        raise HTTPException(status_code=409, detail="ONLY_PENDING_REVIEW_CAN_BE_ASSISTED")
+    if item.review_version != command.expected_review_version:
+        raise HTTPException(status_code=409, detail="REVIEW_VERSION_CONFLICT")
+    try:
+        return llm_review_jobs.create(review_id, command, account.email, idempotency_key)
+    except LlmReviewJobConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.get("/v1/admin/llm-review-jobs/{job_id}", response_model=LlmReviewJob, tags=["admin"])
+def admin_get_llm_review_job(job_id: str, _: AccountSummary = Depends(current_admin)) -> LlmReviewJob:
+    try:
+        return llm_review_jobs.get(job_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="LLM review job not found") from error
+
+
+@app.get("/v1/admin/llm-review-jobs", response_model=list[LlmReviewJob], tags=["admin"])
+def admin_list_llm_review_jobs(
+    review_id: str | None = None,
+    limit: int = 50,
+    _: AccountSummary = Depends(current_admin),
+) -> list[LlmReviewJob]:
+    """Durable task history; used to restore the review page after refresh."""
+    return llm_review_jobs.list(review_id=review_id, limit=limit)
+
+
+@app.get("/v1/admin/llm-review-worker-status", tags=["admin"])
+def admin_llm_review_worker_status(_: AccountSummary = Depends(current_admin)) -> dict[str, object]:
+    """Expose only safe Worker diagnostics; never return provider secrets."""
+    path = recipe_data_paths.worker_status
+    if not path.exists():
+        return {"state": "NOT_OBSERVED", "reason_code": "WORKER_STATUS_NOT_FOUND"}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"state": "UNKNOWN", "reason_code": "WORKER_STATUS_INVALID"}
+    allowed = {"state", "updated_at", "provider_configured", "provider_host", "dns_status", "last_llm_error_code", "last_llm_job_id", "last_llm_status", "last_llm_finished_at"}
+    return {key: value for key, value in payload.items() if key in allowed}
+
+
+@app.post("/v1/admin/llm-review-jobs/{job_id}/cancel", response_model=LlmReviewJob, tags=["admin"])
+def admin_cancel_llm_review_job(
+    job_id: str,
+    command: CancelLlmReviewJobCommand,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    _: AccountSummary = Depends(current_admin),
+) -> LlmReviewJob:
+    try:
+        return llm_review_jobs.cancel(job_id, command.expected_job_version, idempotency_key)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="LLM review job not found") from error
+    except LlmReviewJobConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.put("/v1/admin/reviews/{review_id}/curation", response_model=AdminReviewDetail, tags=["admin"])
@@ -507,6 +658,15 @@ def admin_publish_review(review_id: str, command: AdminPublishCommand, idempoten
     _admin_review_mutation(
         f"publish:{review_id}", idempotency_key, command,
         lambda: _recipe_review_service().publish(review_id, command.expected_review_version, account.email, _published_recipe_path(), command.dataset_version),
+    )
+    return _admin_review_detail(review_id)
+
+
+@app.post("/v1/admin/reviews/{review_id}/revoke", response_model=AdminReviewDetail, tags=["admin"])
+def admin_revoke_review(review_id: str, command: AdminRevokeCommand, idempotency_key: str = Header(..., alias="Idempotency-Key"), account: AccountSummary = Depends(current_admin)) -> AdminReviewDetail:
+    _admin_review_mutation(
+        f"revoke:{review_id}", idempotency_key, command,
+        lambda: _recipe_review_service().revoke(review_id, command.expected_review_version, account.email, command.reason, _published_recipe_path(), command.dataset_version),
     )
     return _admin_review_detail(review_id)
 

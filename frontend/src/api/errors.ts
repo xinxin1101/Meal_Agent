@@ -22,6 +22,14 @@ export class ValidationError extends ApiError {
 const validationMessages: Record<string, string> = {
   SILICONFLOW_NOT_CONFIGURED: "硅基流动模型尚未配置，请检查服务端环境变量。",
   LLM_PROVIDER_FAILED: "模型服务调用失败，请稍后重试。",
+  LLM_PROCESSING_FAILED: "后台结构化任务发生意外错误，请重试；若持续出现，请查看任务中心。",
+  LLM_REVIEW_EXECUTION_FAILED: "后台结构化任务发生意外错误，请重试；若持续出现，请查看任务中心。",
+  LLM_PROVIDER_AUTHENTICATION_FAILED: "模型服务认证失败，请检查服务端密钥和模型权限。",
+  LLM_PROVIDER_RATE_LIMITED: "模型服务请求过于频繁，请稍后重试。",
+  LLM_PROVIDER_TIMEOUT: "模型服务响应超时，请稍后重试。",
+  LLM_PROVIDER_CONNECTION_FAILED: "无法连接模型服务，请检查服务器网络后重试。",
+  LLM_PROVIDER_UNAVAILABLE: "模型服务暂时不可用，请稍后重试。",
+  LLM_PROVIDER_REQUEST_REJECTED: "模型服务拒绝了结构化请求，已记录为待处理状态。",
   LLM_EMPTY_RESPONSE: "模型没有返回结构化内容，请重试。",
   LLM_OUTPUT_SCHEMA_INVALID: "模型返回的 JSON 不符合完整菜谱合同，自动修复后仍未通过 Pydantic 校验。",
   LLM_RESPONSE_INCOMPLETE: "模型没有填写完整的标题、份数、餐次、时间、食材或步骤。",
@@ -41,12 +49,17 @@ function detailCode(detail: unknown): string | undefined {
   return undefined;
 }
 
+export function toUserMessageForCode(code: string | null | undefined, fallback = "后台任务失败，请稍后重试。 "): string {
+  return code && validationMessages[code] ? validationMessages[code] : fallback.trim();
+}
+
 export function toUserMessage(error: unknown): string {
-  if (error instanceof ValidationError) {
+  if (error instanceof ApiError) {
     const code = detailCode(error.detail);
-    return code ? validationMessages[code] ?? `${error.message}（${code}）` : error.message;
+    if (code && validationMessages[code]) return validationMessages[code];
+    if (error instanceof ValidationError && code) return `${error.message}（${code}）`;
+    return error.message;
   }
-  if (error instanceof ApiError) return error.message;
   if (error instanceof DOMException && error.name === "AbortError") return "请求超时，请稍后重试。";
   if (error instanceof Error && error.message) return error.message;
   return "无法连接到服务，请确认后端已经启动。";

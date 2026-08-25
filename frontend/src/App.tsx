@@ -11,6 +11,7 @@ import { PlanningDashboard } from "./components/planning/PlanningDashboard";
 import { useUserProfile } from "./context/UserProfileContext";
 import { PreferenceEditor } from "./features/memory/PreferenceEditor";
 import { HistoryPage } from "./features/history/HistoryPage";
+import { RecipeLibrary } from "./features/recipes/RecipeLibrary";
 import { PlanningComposer, PlanningConstraints } from "./features/planning/PlanningComposer";
 import { PlanResult, recipeDisplayName } from "./features/planning/PlanResult";
 import { MenuDraftResult } from "./features/planning/MenuDraftResult";
@@ -48,13 +49,20 @@ function readinessMessage(readiness?: ProductReadiness): string {
 function menuDraftReadinessMessage(readiness?: ProductReadiness): string | undefined {
   if (!readiness) return "正在检查正式菜谱目录…";
   if (readiness.published_recipe_count < 3) return `普通菜单草稿至少需要 3 条已发布菜谱，当前只有 ${readiness.published_recipe_count} 条。`;
+  if (!readiness.menu_draft_slot_coverage_complete) {
+    const slots = readiness.menu_draft_per_slot_count ?? {};
+    const missing = (["breakfast", "lunch", "dinner"] as const)
+      .filter((slot) => !slots[slot])
+      .map((slot) => slotLabels[slot]);
+    return `普通菜单草稿需要覆盖早餐、午餐和晚餐；当前缺少${missing.join("、")}。请先在管理员菜谱管理中补齐餐次标签或发布对应菜谱。`;
+  }
   return undefined;
 }
 
 export default function App() {
   const { account } = useAuth();
   const [activePage, setActivePage] = useState<AppPage>("plan");
-  const [planningMode, setPlanningMode] = useState<PlanningMode>("verified_nutrition");
+  const [planningMode, setPlanningMode] = useState<PlanningMode>("menu_draft");
   const [profileOpen, setProfileOpen] = useState(false);
   const [query, setQuery] = useState("时间 60 分钟，蛋白质 90g，1500-1700 kcal");
   const [constraints, setConstraints] = useState<PlanningConstraints>({ minutes: "60", protein: "90", energyMin: "1500", energyMax: "1700" });
@@ -103,7 +111,9 @@ export default function App() {
           acknowledge_unverified: true,
         });
         if (isMenuDraft(result)) setMenuDraft(result);
-        else setError(result.reason_code === "INSUFFICIENT_SAFE_DISPLAY_RECIPES" ? "应用已声明的过敏原和忌口后，不足 3 条安全可用的已发布菜谱。请补充经过审核的菜谱，不能放宽安全约束。" : "当前没有已发布菜谱可用于普通菜单草稿。");
+        else if (result.reason_code === "INSUFFICIENT_SAFE_DISPLAY_RECIPES") setError("应用已声明的过敏原和忌口后，不足 3 条安全可用的已发布菜谱。请补充经过审核的菜谱，不能放宽安全约束。");
+        else if (result.reason_code === "INSUFFICIENT_MEAL_SLOT_COVERAGE") setError("已发布菜谱尚未覆盖早餐、午餐和晚餐，不能把其他餐次重新标记为早餐。请先补齐餐次标签或发布早餐菜谱。");
+        else setError("当前没有已发布菜谱可用于普通菜单草稿。");
       } catch (requestError) { setError(toUserMessage(requestError)); }
       finally { setSubmitting(false); }
       return;
@@ -205,12 +215,13 @@ export default function App() {
   return <AppShell activePage={activePage} onNavigate={setActivePage} memoryCount={savedMemories.length} historyCount={history.items.length} account={account}>
     <section className="today-page" hidden={activePage !== "plan"}>
       <header className="page-heading"><div className="page-heading-copy"><p className="eyebrow">今日 · 一日三餐</p><h1>把约束，变成好好吃饭。</h1><p>描述今天的时间和营养目标，MealPilot 会从本地菜谱中生成并复核一份可执行方案。</p></div><div className="safety-inline"><Icon name="shield" size={20}/><span>仅适用于健康成年人，不构成医疗建议。安全约束不会被模型放宽。</span></div></header>
-      <div className="today-layout"><PlanningComposer planningMode={planningMode} query={query} constraints={constraints} parseNotice={parseNotice} submitting={submitting} canSubmit={!validationErrors.length && (planningMode === "menu_draft" ? (productReadiness?.published_recipe_count ?? 0) >= 3 : productReadiness?.ready === true)} readinessMessage={planningMode === "menu_draft" ? menuDraftReadinessMessage(productReadiness) : productReadiness?.ready ? undefined : readinessMessage(productReadiness)} error={error} useHistory={useHistory} historyCount={history.items.length} targetSuggestion={targetSuggestion} targetSuggestionLoading={targetSuggestionLoading} onPlanningModeChange={(value) => { setPlanningMode(value); setSnapshot(undefined); setMenuDraft(undefined); setError(undefined); }} onUseHistoryChange={setUseHistory} onQueryChange={setQuery} onConstraintChange={(key,value) => setConstraints((current) => ({...current,[key]:value}))} onParse={() => void parseQuery()} onSuggestTargets={() => void suggestNutritionTargets()} onApplySuggestion={applyNutritionSuggestion} onSubmit={submit} onOpenProfile={() => setProfileOpen(true)}/><ProfileSummary onEdit={() => setProfileOpen(true)}/></div>
+      <div className="today-layout"><PlanningComposer planningMode={planningMode} query={query} constraints={constraints} parseNotice={parseNotice} submitting={submitting} canSubmit={!validationErrors.length && (planningMode === "menu_draft" ? productReadiness?.menu_draft_slot_coverage_complete === true : productReadiness?.ready === true)} readinessMessage={planningMode === "menu_draft" ? menuDraftReadinessMessage(productReadiness) : productReadiness?.ready ? undefined : readinessMessage(productReadiness)} error={error} useHistory={useHistory} historyCount={history.items.length} targetSuggestion={targetSuggestion} targetSuggestionLoading={targetSuggestionLoading} onPlanningModeChange={(value) => { setPlanningMode(value); setSnapshot(undefined); setMenuDraft(undefined); setError(undefined); }} onUseHistoryChange={setUseHistory} onQueryChange={setQuery} onConstraintChange={(key,value) => setConstraints((current) => ({...current,[key]:value}))} onParse={() => void parseQuery()} onSuggestTargets={() => void suggestNutritionTargets()} onApplySuggestion={applyNutritionSuggestion} onSubmit={submit} onOpenProfile={() => setProfileOpen(true)}/><ProfileSummary onEdit={() => setProfileOpen(true)}/></div>
       {(creatingPlan || snapshot) && <section className="run-panel card" aria-live="polite" aria-busy={creatingPlan || snapshot?.status === "QUEUED" || snapshot?.status === "RUNNING"}><div className="run-heading"><div><h2>规划进度</h2><p>正在按照硬约束筛选、组合并复核三餐。</p></div><div className="run-heading-actions">{snapshot && ["QUEUED", "RUNNING", "PAUSED"].includes(snapshot.status) && <button className="button button-secondary" type="button" onClick={() => void cancelCurrentRun()}>取消本次规划</button>}{snapshot && <span className={`run-status ${snapshot.status.toLowerCase()}`}><i />{statusLabels[snapshot.status]}</span>}</div></div>{creatingPlan && !snapshot ? <div className="planning-loading"><span className="loading-ring"/><strong>正在创建规划任务</strong><p>你的输入会先经过安全过滤，再进入确定性求解。</p></div> : snapshot && <PlanningDashboard runId={snapshot.run_id} runVersion={snapshot.run_version} status={snapshot.status} onSnapshot={setSnapshot}/>} {snapshot?.status === "PAUSED" && snapshot.proposal && <NegotiationPanel proposal={snapshot.proposal} runVersion={snapshot.run_version} currentValues={negotiationValues} pending={submitting} conflictMessage={negotiationConflict} onConfirm={choose}/>} {snapshot?.status === "FAILED" && <div className="notice error">{snapshot.result && !isMealPlan(snapshot.result.result) ? snapshot.result.result.message : "当前条件下没有生成可验证方案，请保留输入后调整条件再试。"}</div>}{snapshot?.status === "CANCELLED" && <div className="notice">本次规划已经取消，没有方案会进入历史记录。</div>}</section>}
       {snapshot?.status === "COMPLETED" && plan && <PlanResult plan={plan} explanation={snapshot.result?.explanation} energyMin={Number(constraints.energyMin)} energyMax={Number(constraints.energyMax)} proteinMin={Number(constraints.protein)} adopted={currentAdopted} adopting={adopting} onAdopt={() => void adoptCurrentPlan()} onAsk={() => setActivePage("assistant")} onReplan={() => { setSnapshot(undefined); window.scrollTo({top:0,behavior:"smooth"}); }}/>} 
       {planningMode === "menu_draft" && menuDraft && <MenuDraftResult draft={menuDraft} onRebuild={() => { setMenuDraft(undefined); window.scrollTo({top:0,behavior:"smooth"}); }}/>} 
       <ProfileDrawer open={profileOpen} onClose={() => setProfileOpen(false)}/>
     </section>
+    <section hidden={activePage !== "recipes"}><header className="page-heading"><div className="page-heading-copy"><p className="eyebrow">来源可追溯 · 制作参考</p><h1>可阅读菜谱库</h1><p>这里保留经过步骤与来源检查的做法。营养、过敏原或餐次资料不完整时，不会把它作为营养规划依据。</p></div></header><RecipeLibrary /></section>
     <section hidden={activePage !== "history"}><HistoryPage collection={history} feedback={feedback} loading={historyLoading} error={historyError} onRefresh={() => void refreshHistory()} onDelete={deleteHistoryItem} onClear={clearHistoryItems} onFeedback={savePlanFeedback} onAsk={(item: AdoptedMealPlan) => { setAssistantHistoryPlanIds([item.history_id]); setActivePage("assistant"); }} onReplan={replanFromHistory}/></section>
     <section className="assistant-page" hidden={activePage !== "assistant"}><header className="page-heading"><div className="page-heading-copy"><p className="eyebrow">连续对话</p><h1>围绕计划，继续聊。</h1><p>对话会持久保存；每条回答都会展示使用的当前计划、精确历史记录和长期偏好。</p></div>{planContext && <button className="button button-secondary" type="button" onClick={() => setActivePage("plan")}><Icon name="calendar" size={17}/>查看当前计划</button>}</header><ChatWorkspace userId={userId} planContext={planContext} memoryCount={savedMemories.length} history={history.items} initialHistoryPlanIds={assistantHistoryPlanIds} onMemoryChange={setSavedMemories}/></section>
     <section className="profile-page" hidden={activePage !== "profile"}><header className="page-heading"><div className="page-heading-copy"><p className="eyebrow">由你控制的数据</p><h1>偏好与规划档案</h1><p>长期偏好、身体参数和过敏原分区管理。过敏原不会从行为推断。</p></div><div className="safety-inline"><Icon name="shield" size={20}/><span>个人档案只用于健康成年人膳食规划；日志不会记录敏感字段。</span></div></header><div className="profile-page-grid"><section className="profile-editor-card card"><ProfileFields radioGroupName="page-allergen-status"/></section><PreferenceEditor userId={userId} items={savedMemories} onChange={setSavedMemories}/></div></section>

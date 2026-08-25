@@ -6,6 +6,7 @@ from pathlib import Path
 
 from mealpilot.ingestion.automation import SourceAutomationPolicy, run_incremental_automation
 from mealpilot.ingestion.jobs import RecipeAcquisitionJob, SourcePolicySummary
+from mealpilot.ingestion.llm_jobs import CreateLlmReviewJobCommand, LlmReviewJobConflict, LlmReviewJobStore
 from mealpilot.ingestion.review import ReviewService, ReviewStore
 from mealpilot.ingestion.settings import RecipeDataPaths
 from mealpilot.ingestion.sources.meishichina.client import FetchPolicy, MeishiChinaHttpClient
@@ -59,6 +60,21 @@ def execute_acquisition_job(project_root: Path, paths: RecipeDataPaths, job: Rec
             actor=f"recipe-worker:{job.job_id}", batch_id=f"{job.job_id}-batch",
         )
     payload = report.model_dump(mode="json")
+    llm_jobs = LlmReviewJobStore(paths.llm_jobs)
+    queued_llm_jobs: list[str] = []
+    for review_id in report.reviews_created:
+        item = review.store.get(review_id)
+        try:
+            queued = llm_jobs.create(
+                review_id,
+                CreateLlmReviewJobCommand(expected_review_version=item.review_version),
+                actor=f"recipe-worker:{job.job_id}",
+                idempotency_key=f"acquisition:{job.job_id}:{review_id}",
+            )
+        except LlmReviewJobConflict:
+            continue
+        queued_llm_jobs.append(queued.job_id)
+    payload["llm_review_jobs_queued"] = queued_llm_jobs
     # Absolute host paths and source content are operational details, not API output.
     payload.pop("batch_path", None)
     return payload

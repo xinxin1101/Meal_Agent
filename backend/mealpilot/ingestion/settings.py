@@ -13,9 +13,12 @@ class RecipeDataPaths:
     raw: Path
     reviews: Path
     published: Path
+    readable_published: Path
     nutrition: Path
     state: Path
     jobs: Path
+    llm_jobs: Path
+    worker_status: Path
 
     def ensure(self) -> "RecipeDataPaths":
         for path in (
@@ -39,7 +42,10 @@ def load_recipe_data_paths(project_root: Path) -> RecipeDataPaths:
         raw=root / "raw",
         reviews=root / "reviews",
         published=root / "published" / "recipes.json",
+        readable_published=root / "published" / "readable-recipes.json",
         nutrition=root / "nutrition" / "foods.json",
         state=root / "state" / "meishichina.json",
         jobs=root / "jobs" / "acquisition.sqlite3",
+        llm_jobs=root / "jobs" / "llm-reviews.sqlite3",
+        worker_status=root / "jobs" / "worker-status.json",
     ).ensure()

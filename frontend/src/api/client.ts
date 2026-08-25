@@ -19,9 +19,10 @@ async function refreshAccessToken(): Promise<boolean> {
 }
 
 function needsIdempotency(method: string, path: string): boolean {
-  if (method === "POST" && path === "/v1/admin/reviews/batch-publish") return true;
+  if (method === "POST" && (path === "/v1/admin/reviews/batch-publish" || path === "/v1/admin/reviews/batch-publish-readable")) return true;
   if (method === "POST" && (path === "/v1/admin/acquisition/jobs" || /^\/v1\/admin\/acquisition\/jobs\/[^/]+\/cancel$/.test(path))) return true;
-  if (["POST", "PUT"].includes(method) && /^\/v1\/admin\/reviews\/[^/]+\/(assist|curation|evidence|approve|publish)$/.test(path)) return true;
+  if (method === "POST" && /^\/v1\/admin\/llm-review-jobs\/[^/]+\/cancel$/.test(path)) return true;
+  if (["POST", "PUT"].includes(method) && /^\/v1\/admin\/reviews\/[^/]+\/(assist|curation|evidence|approve|publish|revoke)$/.test(path)) return true;
   return (method === "POST" && (path === "/v1/runs" || path === "/v1/chat" || /^\/v1\/runs\/[^/]+\/(decisions|cancel)$/.test(path) || /^\/v1\/history\/[^/]+\/adoptions$/.test(path) || /^\/v1\/users\/[^/]+\/conversations$/.test(path)))
     || (method === "PUT" && /^\/v1\/feedback\/[^/]+\/[^/]+$/.test(path))
     || (method === "DELETE" && (/^\/v1\/history\/[^/]+(?:\/[^/?]+)?/.test(path) || /^\/v1\/users\/[^/]+\/conversations\/[^/?]+/.test(path)));

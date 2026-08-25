@@ -149,6 +149,32 @@ class Recipe(BaseModel):
         return self
 
 
+class ReadableRecipeIngredient(BaseModel):
+    """Source-preserving ingredient text for cooking-reference publication."""
+
+    model_config = ConfigDict(extra="forbid")
+    group: Literal["main", "secondary", "seasoning", "other"]
+    raw_name: str = Field(min_length=1, max_length=200)
+    display_quantity: str = Field(min_length=1, max_length=100)
+
+
+class ReadableRecipe(BaseModel):
+    """A reviewed cooking reference that is not necessarily a planning input."""
+
+    model_config = ConfigDict(extra="forbid")
+    recipe_id: str
+    version: str
+    title: str = Field(min_length=1, max_length=120)
+    supported_slots: list[MealSlot] = Field(default_factory=list)
+    servings: PositiveDecimal | None = None
+    prep_minutes: int | None = Field(default=None, ge=0)
+    ingredients: list[ReadableRecipeIngredient] = Field(min_length=1)
+    cooking_steps: list[CookingStep] = Field(min_length=1)
+    source: SourceMetadata
+    warnings: list[str] = Field(default_factory=list)
+    numeric_policy_version: str
+
+
 class AdminRecipeCatalogItem(BaseModel):
     """Read-only projection for administrators; review rows are never planning inputs."""
 
@@ -161,6 +187,12 @@ class AdminRecipeCatalogItem(BaseModel):
     quality_status: Literal["BLOCKED", "PUBLICATION_READY", "SOLVER_READY"] | None = None
     processing_stage: Literal["INITIAL_VALIDATED", "LLM_FAILED", "FINAL_VALIDATION_BLOCKED", "FINAL_VALIDATED"] | None = None
     solver_eligible: bool
+    # A record may be readable before it is usable in an unverified menu, and
+    # menu-capable before it has authoritative nutrition for CP-SAT.
+    # Defaults keep historic review projections backward compatible.
+    readable_eligible: bool = False
+    readable_published: bool = False
+    menu_draft_eligible: bool = False
     supported_slots: list[MealSlot] = Field(default_factory=list)
     servings: PositiveDecimal | None = None
     prep_minutes: int | None = Field(default=None, ge=0)
@@ -325,7 +357,7 @@ class MenuDraft(BaseModel):
 class MenuDraftFailure(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["FAILED"] = "FAILED"
-    reason_code: Literal["NO_PUBLISHED_RECIPES", "INSUFFICIENT_SAFE_DISPLAY_RECIPES"]
+    reason_code: Literal["NO_PUBLISHED_RECIPES", "INSUFFICIENT_SAFE_DISPLAY_RECIPES", "INSUFFICIENT_MEAL_SLOT_COVERAGE"]
     message: str
     excluded_recipe_ids: list[str] = Field(default_factory=list)
     exclusion_reasons: dict[str, list[str]] = Field(default_factory=dict)
@@ -732,3 +764,10 @@ class ProductReadiness(BaseModel):
     solver_eligible_count: int = Field(ge=0)
     per_slot_count: dict[MealSlot, int]
     catalog_coverage_complete: bool
+    # Display/menu availability is intentionally separate from strict Solver
+    # business readiness. Slot coverage is advisory because MenuDraft may use
+    # a labelled slot fallback.
+    display_recipe_count: int = Field(default=0, ge=0)
+    menu_draft_recipe_count: int = Field(default=0, ge=0)
+    menu_draft_per_slot_count: dict[MealSlot, int] = Field(default_factory=dict)
+    menu_draft_slot_coverage_complete: bool = False

@@ -144,10 +144,6 @@ def run_incremental_automation(
             try:
                 item = review.prepare(raw, actor=actor)
                 created.append(item.review_id)
-                try:
-                    item = review.assist(item.review_id, item.review_version, actor)
-                except ReviewRejected as error:
-                    item = review.record_llm_failure(item.review_id, item.review_version, actor, str(error))
             except ReviewConflict as error:
                 if str(error) != "REVIEW_ALREADY_EXISTS":
                     raise

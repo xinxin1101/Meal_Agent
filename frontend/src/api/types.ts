@@ -73,6 +73,12 @@ export interface Recipe {
   source: { source_id: string; source_url: string; license: string; data_version: string };
   numeric_policy_version: string; nutrition_data_version?: string | null;
 }
+export interface ReadableRecipeIngredient { group: "main" | "secondary" | "seasoning" | "other"; raw_name: string; display_quantity: string }
+export interface ReadableRecipe {
+  recipe_id: string; version: string; title: string; supported_slots: MealSlot[]; servings?: string | null; prep_minutes?: number | null;
+  ingredients: ReadableRecipeIngredient[]; cooking_steps: CookingStep[];
+  source: Recipe["source"]; warnings: string[]; numeric_policy_version: string;
+}
 export type PlanningMode = "verified_nutrition" | "menu_draft";
 export interface MenuDraftCommand {
   draft_id: string; profile: UserProfile; max_total_minutes?: number | null; acknowledge_unverified: true;
@@ -88,13 +94,14 @@ export interface MenuDraft {
   numeric_policy_version: "menu-draft-decimal-v1"; nutrition_data_versions: string[];
 }
 export interface MenuDraftFailure {
-  status: "FAILED"; reason_code: "NO_PUBLISHED_RECIPES" | "INSUFFICIENT_SAFE_DISPLAY_RECIPES";
+  status: "FAILED"; reason_code: "NO_PUBLISHED_RECIPES" | "INSUFFICIENT_SAFE_DISPLAY_RECIPES" | "INSUFFICIENT_MEAL_SLOT_COVERAGE";
   message: string; excluded_recipe_ids: string[]; exclusion_reasons: Record<string, string[]>;
 }
 export interface AdminRecipeCatalogItem {
   record_id: string; recipe_id?: string | null; title: string; origin: "ACTIVE_CATALOG" | "REVIEW_QUEUE";
   lifecycle_status: "ACTIVE" | "PENDING" | "APPROVED" | "REJECTED" | "PUBLISHED" | "REVOKED";
   quality_status?: "BLOCKED" | "PUBLICATION_READY" | "SOLVER_READY" | null; solver_eligible: boolean;
+  readable_eligible?: boolean; readable_published?: boolean; menu_draft_eligible?: boolean;
   processing_stage?: "INITIAL_VALIDATED" | "LLM_FAILED" | "FINAL_VALIDATION_BLOCKED" | "FINAL_VALIDATED" | null;
   supported_slots: MealSlot[]; servings?: string | null; prep_minutes?: number | null; ingredients: RecipeIngredient[];
   cooking_steps: CookingStep[]; source_id: string; source_url: string; license: string; data_version: string; blocking_reasons: string[]; solver_blocking_reasons: string[];
@@ -102,7 +109,7 @@ export interface AdminRecipeCatalogItem {
 export interface AdminCanonicalIngredient { canonical_id: string; canonical_name: string; allergens: string[]; allergen_composition_known: boolean }
 export interface AdminRawIngredient { group: "main" | "secondary" | "seasoning" | "other"; raw_name: string; raw_amount: string; raw_text: string }
 export interface AdminIngredientOverride {
-  raw_name: string; canonical_id: string; canonical_name: string; amount?: string | null; unit?: string | null;
+  source_index?: number | null; raw_name: string; canonical_id: string; canonical_name: string; amount?: string | null; unit?: string | null;
   qualitative_label?: "适量" | "少许" | null; quantity_origin?: QuantityOrigin; nutrition_calculation_role: "INCLUDED" | "EXCLUDED_MINOR_INGREDIENT";
   allergens: string[]; allergen_composition_known: boolean;
 }
@@ -113,7 +120,7 @@ export interface AdminAuthorizationEvidence {
 }
 export interface AdminRecipeReview {
   review_id: string; review_version: number; status: "PENDING" | "APPROVED" | "REJECTED" | "PUBLISHED" | "REVOKED";
-  processing_stage: "INITIAL_VALIDATED" | "LLM_FAILED" | "FINAL_VALIDATION_BLOCKED" | "FINAL_VALIDATED"; processing_errors: string[]; source_use_scope: "PERSONAL_STUDY_INTERNAL";
+  processing_stage: "INITIAL_VALIDATED" | "LLM_FAILED" | "FINAL_VALIDATION_BLOCKED" | "FINAL_VALIDATED"; processing_errors: string[]; migration_warnings?: string[]; source_use_scope: "PERSONAL_STUDY_INTERNAL";
   raw: { source_id: string; source_url: string; title: string; ingredients: AdminRawIngredient[]; cooking_steps: CookingStep[]; warnings: string[]; copyright_notice?: string | null };
   curation: { title_override?: string | null; servings?: string | null; supported_slots: MealSlot[]; prep_minutes?: number | null; ingredient_overrides: AdminIngredientOverride[]; step_overrides: Record<string, string>; excluded_step_numbers: number[] };
   draft: { title: string; ingredients: Array<{ raw_name: string; canonical_id?: string | null; canonical_name?: string | null; display_quantity: string; quantity_kind?: IngredientQuantityKind | null; quantity_origin?: QuantityOrigin }>; cooking_steps: CookingStep[]; solver_eligible: boolean };
@@ -121,13 +128,23 @@ export interface AdminRecipeReview {
   llm_assistance?: { model: string; prompt_version: string; accepted_suggestions: string[]; rejected_suggestions: string[]; requires_human_review: true } | null;
   authorization_evidence: AdminAuthorizationEvidence[];
 }
-export interface AdminReviewDetail { review: AdminRecipeReview; canonical_ingredients: AdminCanonicalIngredient[]; can_approve: boolean; can_publish: boolean }
-export interface AdminBatchPublishResponse { published_count: number; failed_count: number; results: Array<{ review_id: string; status: "PUBLISHED" | "FAILED"; review_version?: number | null; reason_code?: string | null }> }
+export interface AdminReviewDetail { review: AdminRecipeReview; canonical_ingredients: AdminCanonicalIngredient[]; can_approve: boolean; can_publish_readable: boolean; can_publish: boolean }
+export interface LlmReviewJob {
+  job_id: string; review_id: string; expected_review_version: number;
+  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "ARCHIVED";
+  job_version: number; created_by: string; created_at: string; updated_at: string;
+  started_at?: string | null; completed_at?: string | null; attempts: number;
+  lease_expires_at?: string | null; result_review_version?: number | null; error_code?: string | null;
+}
+export interface AdminBatchPublishResponse { published_count: number; failed_count: number; results: Array<{ review_id: string; status: "PUBLISHED" | "READABLE_PUBLISHED" | "FAILED"; review_version?: number | null; reason_code?: string | null }> }
 export interface ProductReadiness {
   ready: boolean;
   reason_codes: Array<"NO_PUBLISHED_RECIPES" | "NO_SOLVER_ELIGIBLE_RECIPES" | "BREAKFAST_COVERAGE_MISSING" | "LUNCH_COVERAGE_MISSING" | "DINNER_COVERAGE_MISSING" | "NUTRITION_COVERAGE_INCOMPLETE">;
   published_recipe_count: number; solver_eligible_count: number;
   per_slot_count: Record<MealSlot, number>; catalog_coverage_complete: boolean;
+  display_recipe_count?: number; menu_draft_recipe_count?: number;
+  menu_draft_per_slot_count?: Partial<Record<MealSlot, number>>;
+  menu_draft_slot_coverage_complete?: boolean;
 }
 export interface SourcePolicySummary {
   policy_id: string; policy_version: string; enabled: boolean; purpose: "PERSONAL_STUDY";

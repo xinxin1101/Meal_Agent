@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiClient } from "../../api/client";
-import { toUserMessage } from "../../api/errors";
-import type { RecipeAcquisitionEvent, RecipeAcquisitionJob, RecipeAcquisitionPreview, SourcePolicySummary } from "../../api/types";
+import { toUserMessage, toUserMessageForCode } from "../../api/errors";
+import type { LlmReviewJob, RecipeAcquisitionEvent, RecipeAcquisitionJob, RecipeAcquisitionPreview, SourcePolicySummary } from "../../api/types";
 
 const statusLabel: Record<RecipeAcquisitionJob["status"], string> = {
   QUEUED: "等待 Worker", RUNNING: "采集中", REVIEW_READY: "已进入审核队列",
@@ -16,16 +16,18 @@ export function AdminAcquisitionPanel({ onReviewQueueChanged }: { onReviewQueueC
   const [acknowledged, setAcknowledged] = useState(false);
   const [preview, setPreview] = useState<RecipeAcquisitionPreview>();
   const [events, setEvents] = useState<Record<string, RecipeAcquisitionEvent[]>>({});
+  const [llmJobs, setLlmJobs] = useState<LlmReviewJob[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
   async function load() {
     try {
-      const [nextPolicies, nextJobs] = await Promise.all([
+      const [nextPolicies, nextJobs, nextLlmJobs] = await Promise.all([
         apiClient.get<SourcePolicySummary[]>("/v1/admin/acquisition/policies"),
         apiClient.get<RecipeAcquisitionJob[]>("/v1/admin/acquisition/jobs"),
+        apiClient.get<LlmReviewJob[]>("/v1/admin/llm-review-jobs?limit=200"),
       ]);
-      setPolicies(nextPolicies); setJobs(nextJobs);
+      setPolicies(nextPolicies); setJobs(nextJobs); setLlmJobs(nextLlmJobs);
     } catch (requestError) { setError(toUserMessage(requestError)); }
   }
 
@@ -42,6 +44,7 @@ export function AdminAcquisitionPanel({ onReviewQueueChanged }: { onReviewQueueC
   }, [jobs, onReviewQueueChanged]);
 
   const policy = policies.find((item) => item.policy_id === selectedPolicy);
+  const llmJobIds = (job: RecipeAcquisitionJob) => Array.isArray(job.result?.llm_review_jobs_queued) ? job.result.llm_review_jobs_queued.filter((value): value is string => typeof value === "string") : [];
   const command = { policy_id: selectedPolicy, max_records: maxRecords, acknowledge_personal_study: true as const };
 
   async function createPreview() {
@@ -90,7 +93,7 @@ export function AdminAcquisitionPanel({ onReviewQueueChanged }: { onReviewQueueC
         <header><div><strong>{statusLabel[job.status]}</strong><code>{job.job_id}</code></div><span className={`job-status ${job.status.toLowerCase()}`}>{job.status}</span></header>
         <dl><div><dt>策略</dt><dd>{job.policy_id}</dd></div><div><dt>上限</dt><dd>{job.max_records} 条</dd></div><div><dt>尝试</dt><dd>{job.attempts}</dd></div><div><dt>创建时间</dt><dd>{new Date(job.created_at).toLocaleString()}</dd></div></dl>
         {job.error_code && <div className="notice error">错误代码：{job.error_code}</div>}
-        {job.result && <p className="job-result">发现 {String(job.result.discovered_count ?? 0)} 条；新增或变化 {String(job.result.new_or_changed_count ?? 0)} 条；{Number(job.result.new_or_changed_count ?? 0) > 0 ? "新增记录已进入隔离审核队列。" : "当前扫描范围内均为已采集记录，没有触及数据库容量上限。"}</p>}
+        {job.result && <><p className="job-result">发现 {String(job.result.discovered_count ?? 0)} 条；新增或变化 {String(job.result.new_or_changed_count ?? 0)} 条；{Number(job.result.new_or_changed_count ?? 0) > 0 ? "新增记录已进入隔离审核队列。" : "当前扫描范围内均为已采集记录，没有触及数据库容量上限。"}</p>{llmJobIds(job).length > 0 && <p className="job-result">结构化任务：{llmJobIds(job).map((jobId) => { const linked = llmJobs.find((item) => item.job_id === jobId); return linked ? `${linked.status}${linked.error_code ? `（${toUserMessageForCode(linked.error_code)}）` : ""}` : "等待状态同步"; }).join(" · ")}</p>}</>}
         <div className="admin-card-actions">{job.status === "QUEUED" && <button className="button button-secondary" type="button" disabled={busy} onClick={() => void cancel(job)}>取消排队</button>}<button className="button button-ghost" type="button" onClick={() => void toggleEvents(job.job_id)}>{events[job.job_id] ? "收起事件" : "查看事件"}</button></div>
         {events[job.job_id] && <ol className="job-events">{events[job.job_id].map((event) => <li key={event.event_id}><time>{new Date(event.created_at).toLocaleTimeString()}</time><span>{event.event_type}</span><small>v{event.job_version}</small></li>)}</ol>}
       </article>)}

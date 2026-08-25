@@ -10,10 +10,12 @@ def test_unified_recipe_root_contains_all_acquisition_artifacts(tmp_path: Path, 
     assert paths.raw == root / "raw"
     assert paths.reviews == root / "reviews"
     assert paths.published == root / "published" / "recipes.json"
+    assert paths.readable_published == root / "published" / "readable-recipes.json"
     assert paths.nutrition == root / "nutrition" / "foods.json"
     assert paths.state == root / "state" / "meishichina.json"
     assert paths.jobs == root / "jobs" / "acquisition.sqlite3"
+    assert paths.llm_jobs == root / "jobs" / "llm-reviews.sqlite3"
     assert all(
         str(value).startswith(str(root))
-        for value in (paths.raw, paths.reviews, paths.published, paths.nutrition, paths.state, paths.jobs)
+        for value in (paths.raw, paths.reviews, paths.published, paths.readable_published, paths.nutrition, paths.state, paths.jobs, paths.llm_jobs)
     )

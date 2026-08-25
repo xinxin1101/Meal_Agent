@@ -223,7 +223,7 @@ def test_incremental_automation_stages_changes_once_and_requires_admin_batch_rev
     assert len(first.reviews_created) == 2
     assert first.auto_published_recipe_ids == []
     assert all(reasons == ["ADMIN_BATCH_REVIEW_REQUIRED"] for reasons in first.publication_stops.values())
-    assert first.processing_counts["LLM_FAILED"] == 2
+    assert first.processing_counts["INITIAL_VALIDATED"] == 2
 
     second = run_incremental_automation(
         policy,

@@ -44,11 +44,13 @@ Quantity is a tagged union implemented by `RecipeIngredient`:
 
 `Recipe` stores ordered, image-independent `CookingStep` text and ingredient references. Equipment may appear naturally inside instructions but has no structured field or planning meaning.
 
-Publication and Solver eligibility are deliberately separate:
+Publication and Solver eligibility are deliberately separate. The product exposes three capabilities rather than treating incomplete nutrition evidence as a reason to hide an otherwise usable recipe:
 
-- `PUBLICATION_READY`: provenance/licence, ingredient identity, servings, time, and cooking steps pass display review. Qualitative quantities and unknown composition may be retained with an explicit warning, but the recipe is forced to `solver_eligible=false`.
-- `SOLVER_READY`: all publication rules pass and `nutrition_per_serving` has one authoritative `nutrition_basis`: `CALCULATED_FROM_INGREDIENTS`, `SOURCE_DECLARED`, or `REVIEWED_STANDARD_PORTION`.
-- A publication-only recipe may be shown as cooking reference but is excluded from planning and post-solve totals.
+- `READABLE`: source metadata, a title, at least one source-preserving ingredient and ordered, actionable text steps are present. It can be published to the recipe library. Missing servings, time, meal slot, precise quantity, nutrition evidence, or full allergen composition remain visible as warnings and do not make the recipe a recommendation.
+- `MENU_DRAFT_ELIGIBLE` (`PUBLICATION_READY`): a readable recipe additionally has reviewed servings, preparation time, and at least one supported meal slot. It may be used only by the explicitly unverified menu-draft flow; the flow requires a distinct, genuinely matching breakfast, lunch, and dinner recipe and never relabels a recipe to fill a missing meal slot.
+- `SOLVER_ELIGIBLE` (`SOLVER_READY`): all menu-draft rules pass, every planning-relevant ingredient has the required identity/quantity/allergen evidence, and `nutrition_per_serving` has one authoritative `nutrition_basis`: `CALCULATED_FROM_INGREDIENTS`, `SOURCE_DECLARED`, or `REVIEWED_STANDARD_PORTION`.
+
+The administrator projection reports `readable_eligible`, `readable_published`, `menu_draft_eligible`, and `solver_eligible` separately. A published readable recipe is not automatically a menu candidate; a menu candidate is not automatically a nutrition-planning candidate.
 
 ## Planning contracts
 
@@ -83,7 +85,7 @@ Each new `PlanSelection` contains the recipe id/version plus a read-only title a
 Planning now has two deliberately non-interchangeable result contracts:
 
 - `MealPlan` is the original deterministic nutrition-validated result. It only uses `SOLVER_READY` recipes and may claim that nutrition, time, avoidance, and declared-allergen validation passed.
-- `MenuDraft` has status `UNVERIFIED_MENU` and requires `acknowledge_unverified=true`. It may arrange published display recipes but never claims nutrition or medical validation. `nutrition_totals` is `null` unless all three selected recipes carry an authoritative nutrition basis; individual meal nutrition is likewise optional. It carries `menu-draft-v1`, `menu-draft-decimal-v1`, exact source metadata, nutrition-data versions, and machine-readable warnings.
+- `MenuDraft` has status `UNVERIFIED_MENU` and requires `acknowledge_unverified=true`. It selects only published `MENU_DRAFT_ELIGIBLE` recipes with a real breakfast/lunch/dinner match and never claims nutrition or medical validation. `nutrition_totals` is `null` unless all three selected recipes carry an authoritative nutrition basis; individual meal nutrition is likewise optional. It carries `menu-draft-v1`, `menu-draft-decimal-v1`, exact source metadata, nutrition-data versions, and machine-readable warnings.
 
 Declared allergies remain fail-closed in both modes: a display recipe with unknown allergen composition is excluded from a draft whenever the profile declares any allergen. With an explicitly confirmed empty allergy list, such a recipe may appear only in the visibly unverified draft and carries `ALLERGEN_COMPOSITION_NOT_FULLY_REVIEWED`; it can never enter `MealPlan`.
 
@@ -97,7 +99,7 @@ Conversation messages persist the exact current plan, adopted history, preferenc
 
 ## Acquisition and review
 
-`RawMeishiChinaRecipe` is untrusted quarantine data, never a planning recipe. `StructuredRecipeDraft` preserves raw quantities, reviewed quantity kind, normalized identity, allergen state, ordered text steps, servings, slots, time, and optional authoritative nutrition. New `RecipeQualityReport` artifacts use `mc-r3-v3` (v2 remains readable for audit history) and report `BLOCKED`, `PUBLICATION_READY`, or `SOLVER_READY` with separate publication and Solver blockers. The administrator catalog projection exposes both `blocking_reasons` and `solver_blocking_reasons`, so a successfully published display recipe is never confused with a planning-ready recipe.
+`RawMeishiChinaRecipe` is untrusted quarantine data, never a planning recipe. `StructuredRecipeDraft` preserves raw quantities, reviewed quantity kind, normalized identity, allergen state, ordered text steps, servings, slots, time, and optional authoritative nutrition. `RecipeQualityReport` artifacts use `mc-r3-v3` (v2 remains readable for audit history) and expose independent readable, menu, and Solver outcomes. `BLOCKED` can therefore still be safely published as a `ReadableRecipe` when the readable gate passes, while `PUBLICATION_READY` and `SOLVER_READY` retain their stricter planning meanings. The administrator catalog projection exposes readable, publication, and Solver blockers separately, so a successfully published display recipe is never confused with a planning-ready recipe.
 
 Authorization evidence is bound to exact source id and content hash. Personal-study acknowledgement never satisfies publication rights. Approval additionally requires deterministic quality and delegates to the existing `publish()` boundary; revocation withdraws the exact version.
 

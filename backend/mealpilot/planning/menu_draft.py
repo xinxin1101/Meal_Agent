@@ -39,11 +39,22 @@ def _safe_display_recipes(
     return accepted, excluded
 
 
-def _select_for_slot(recipes: list[Recipe], slot: MealSlot) -> tuple[Recipe, bool]:
-    supported = [recipe for recipe in recipes if slot in recipe.supported_slots]
-    candidates = supported or recipes
-    selected = min(candidates, key=lambda item: (item.prep_minutes, item.recipe_id))
-    return selected, not supported
+def _select_distinct_slots(recipes: list[Recipe]) -> list[tuple[MealSlot, Recipe]] | None:
+    """Find a deterministic three-slot matching; never relabel another meal."""
+
+    slots = (MealSlot.BREAKFAST, MealSlot.LUNCH, MealSlot.DINNER)
+
+    def assign(index: int, remaining: list[Recipe], selected: list[tuple[MealSlot, Recipe]]) -> list[tuple[MealSlot, Recipe]] | None:
+        if index == len(slots):
+            return selected
+        slot = slots[index]
+        for recipe in sorted((item for item in remaining if slot in item.supported_slots), key=lambda item: (item.prep_minutes, item.recipe_id)):
+            result = assign(index + 1, [item for item in remaining if item.recipe_id != recipe.recipe_id], [*selected, (slot, recipe)])
+            if result is not None:
+                return result
+        return None
+
+    return assign(0, recipes, [])
 
 
 def create_menu_draft(recipes: list[Recipe], command: MenuDraftCommand) -> MenuDraft | MenuDraftFailure:
@@ -62,20 +73,22 @@ def create_menu_draft(recipes: list[Recipe], command: MenuDraftCommand) -> MenuD
             excluded_recipe_ids=sorted(exclusions),
             exclusion_reasons=exclusions,
         )
+    selected_slots = _select_distinct_slots(candidates)
+    if selected_slots is None:
+        return MenuDraftFailure(
+            reason_code="INSUFFICIENT_MEAL_SLOT_COVERAGE",
+            message="Published display recipes do not cover three distinct meal slots.",
+            excluded_recipe_ids=sorted(exclusions),
+            exclusion_reasons=exclusions,
+        )
 
-    remaining = list(candidates)
     meals: list[MenuDraftMeal] = []
     warnings = [
         "MENU_DRAFT_NOT_NUTRITION_VALIDATED",
         "MENU_DRAFT_NOT_MEDICAL_ADVICE",
     ]
-    for slot in (MealSlot.BREAKFAST, MealSlot.LUNCH, MealSlot.DINNER):
-        recipe, slot_fallback = _select_for_slot(remaining, slot)
-        remaining.remove(recipe)
+    for slot, recipe in selected_slots:
         meal_warnings: list[str] = []
-        if slot_fallback:
-            meal_warnings.append("MEAL_SLOT_FALLBACK")
-            warnings.append(f"MEAL_SLOT_FALLBACK:{slot.value}")
         if any(not ingredient.allergen_composition_known for ingredient in recipe.ingredients):
             meal_warnings.append("ALLERGEN_COMPOSITION_NOT_FULLY_REVIEWED")
             warnings.append(f"ALLERGEN_COMPOSITION_NOT_FULLY_REVIEWED:{recipe.recipe_id}")

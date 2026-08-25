@@ -41,6 +41,11 @@ EMBEDDED_MASS_PATTERN = re.compile(
 
 class IngredientOverride(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    # Source order, rather than the display name, is the durable identity of an
+    # ingredient row.  Names can legitimately repeat (for example seasoning in
+    # two preparation stages).  ``None`` is accepted only for legacy stored
+    # reviews; every new LLM/admin write supplies an index.
+    source_index: int | None = Field(default=None, ge=0)
     raw_name: str = Field(min_length=1)
     canonical_id: str = Field(min_length=1)
     canonical_name: str = Field(min_length=1)
@@ -80,9 +85,12 @@ class RecipeCuration(BaseModel):
 
     @model_validator(mode="after")
     def unique_overrides(self) -> "RecipeCuration":
-        names = [item.raw_name for item in self.ingredient_overrides]
-        if len(names) != len(set(names)):
-            raise ValueError("ingredient overrides must have unique raw_name values")
+        indexes = [item.source_index for item in self.ingredient_overrides if item.source_index is not None]
+        if len(indexes) != len(set(indexes)):
+            raise ValueError("ingredient overrides must have unique source_index values")
+        legacy_names = [item.raw_name for item in self.ingredient_overrides if item.source_index is None]
+        if len(legacy_names) != len(set(legacy_names)):
+            raise ValueError("legacy ingredient overrides must have unique raw_name values")
         if any(number < 1 for number in self.step_overrides) or any(number < 1 for number in self.excluded_step_numbers):
             raise ValueError("step numbers must be positive")
         if set(self.step_overrides).intersection(self.excluded_step_numbers):
@@ -139,6 +147,8 @@ class RecipeQualityReport(BaseModel):
     staging_id: str
     quality_gate_version: Literal["mc-r3-v2", "mc-r3-v3", "mc-r3-v4"] = QUALITY_GATE_VERSION
     status: Literal["BLOCKED", "PUBLICATION_READY", "SOLVER_READY"]
+    readable_eligible: bool = False
+    readable_blocking_reasons: list[str] = Field(default_factory=list)
     blocking_reasons: list[str]
     solver_blocking_reasons: list[str]
     warnings: list[str]
@@ -492,8 +502,14 @@ def build_quality_draft(
     curation: RecipeCuration,
     foods: list[FoodNutrition],
 ) -> tuple[StructuredRecipeDraft, RecipeQualityReport]:
-    overrides = {normalize_name(item.raw_name): item for item in curation.ingredient_overrides}
-    ingredients = [normalize_ingredient(item, overrides.get(normalize_name(item.raw_name))) for item in raw.ingredients]
+    indexed_overrides = {item.source_index: item for item in curation.ingredient_overrides if item.source_index is not None}
+    # Legacy review files predate source_index.  Keep them readable while all
+    # new curation paths use the non-ambiguous source-index map above.
+    legacy_overrides = {normalize_name(item.raw_name): item for item in curation.ingredient_overrides if item.source_index is None}
+    ingredients = [
+        normalize_ingredient(item, indexed_overrides.get(index) or legacy_overrides.get(normalize_name(item.raw_name)))
+        for index, item in enumerate(raw.ingredients)
+    ]
     steps, step_reasons, removed_medical, removed_presentation = normalize_steps(raw, curation)
     prep_minutes = curation.prep_minutes if curation.prep_minutes is not None else TIME_LABELS.get(raw.source_time_label or "")
     slots = resolve_slots(raw, curation)
@@ -508,6 +524,11 @@ def build_quality_draft(
         item.raw_name for item in ingredients if item.quantity_kind == IngredientQuantityKind.UNSPECIFIED
     )
     unknown_allergens = sorted(item.raw_name for item in ingredients if not item.allergen_composition_known)
+    # A readable recipe keeps source ingredient text and never makes planning
+    # claims.  It therefore needs executable, non-medical text steps, but not
+    # portions, meal slots, nutrition coverage or allergen completeness.
+    readable_blocking = list(step_reasons)
+    readable_eligible = not readable_blocking and bool(ingredients) and bool(steps)
     publication_blocking: list[str] = []
     if unresolved_names:
         publication_blocking.append("INGREDIENT_MAPPING_INCOMPLETE")
@@ -571,6 +592,8 @@ def build_quality_draft(
         "staging_id": raw.staging_id,
         "quality_gate_version": QUALITY_GATE_VERSION,
         "status": status,
+        "readable_eligible": readable_eligible,
+        "readable_blocking_reasons": readable_blocking,
         "blocking_reasons": publication_blocking,
         "solver_blocking_reasons": solver_blocking,
         "warnings": list(dict.fromkeys(warnings)),
